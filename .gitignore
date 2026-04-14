@@ -1,0 +1,42 @@
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Secrets & Credentials =====
+*.json
+!frontend/package.json
+!frontend/tsconfig.json
+!frontend/package-lock.json
+!backend/config/lora_registry.json
+!backend/config/imagen_registry.json
+*.pem
+*.key
+*.p12
+GCP_VERTEX_AI_SETUP.txt
+
+# ===== Personal Notes =====
+*.rtf
+
+# ===== Frontend =====
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+frontend/.env*.local
+frontend/tsconfig.tsbuildinfo
+frontend/out/
+frontend/.vercel/
+
+# ===== Backend =====
+backend/venv/
+backend/.env
+backend/.env.*
+backend/__pycache__/
+backend/**/__pycache__/
+backend/**/*.pyc
+backend/**/*.pyo
+backend/.pytest_cache/
+backend/scripts/results.json
+
+# ===== Claude agent memory (local only) =====
+.claude/
+backend/.claude/
