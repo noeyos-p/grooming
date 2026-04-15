@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { ResultDisplay } from '@/components/ResultDisplay'
 import { useGenerate } from '@/hooks/useGenerate'
@@ -7,11 +7,11 @@ import { useGenerate } from '@/hooks/useGenerate'
 export default function ResultPage() {
   const router = useRouter()
   const { generate, loading, error, result } = useGenerate()
-  const [started, setStarted] = useState(false)
+  const startedRef = useRef(false)
 
   useEffect(() => {
-    if (started) return
-    setStarted(true)
+    if (startedRef.current) return
+    startedRef.current = true
 
     const imageData = sessionStorage.getItem('uploadedImage')
     const breedId = sessionStorage.getItem('breedId')
@@ -25,7 +25,7 @@ export default function ResultPage() {
     // TODO: 실제 서비스에서는 Cloudinary에 먼저 업로드 후 URL 전달
     // 현재는 base64 dataURL을 image_url로 전달
     generate(imageData, breedId, styleId)
-  }, [started, generate, router])
+  }, [generate, router])
 
   const handleRetry = () => {
     router.push('/')

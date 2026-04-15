@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { GenerateResponse } from '@/types'
 
 export function useGenerate() {
@@ -7,7 +7,7 @@ export function useGenerate() {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<GenerateResponse | null>(null)
 
-  const generate = async (imageUrl: string, breedId: string, styleId: string) => {
+  const generate = useCallback(async (imageUrl: string, breedId: string, styleId: string) => {
     setLoading(true)
     setError(null)
     setResult(null)
@@ -25,7 +25,7 @@ export function useGenerate() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   return { generate, loading, error, result }
 }
