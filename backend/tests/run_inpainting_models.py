@@ -79,6 +79,49 @@ PROMPT = (
 NEGATIVE_PROMPT = "deformed, blurry, bad anatomy, disfigured, low quality"
 
 RESULTS_PATH = _BACKEND_DIR / "scripts" / "results.json"
+_CHANGELOG_PATH = _BACKEND_DIR / "CHANGELOG.md"
+
+
+def _append_urls_to_changelog(results: list[dict], image_url: str) -> None:
+    """인페인팅 모델 테스트 결과 URL을 backend/CHANGELOG.md에 기록한다."""
+    from datetime import datetime
+
+    if not _CHANGELOG_PATH.exists():
+        return
+
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    timestamp = now.strftime("%Y-%m-%d %H:%M")
+
+    lines = [f"\n**[inpainting-models] {timestamp}** — 입력: {image_url}"]
+    for r in results:
+        url_part = r["output_url"] or f"ERROR: {r.get('error', 'unknown')}"
+        lines.append(f"- `{r['model']}` ({r['elapsed']}s) [{r['status']}]: {url_part}")
+    entry = "\n".join(lines) + "\n"
+
+    content = _CHANGELOG_PATH.read_text(encoding="utf-8")
+    date_marker = f"## {today}"
+    date_idx = content.find(date_marker)
+
+    if date_idx == -1:
+        first_date_idx = content.find("\n## ")
+        if first_date_idx == -1:
+            _CHANGELOG_PATH.write_text(content + f"\n## {today}\n" + entry, encoding="utf-8")
+        else:
+            new_content = content[:first_date_idx] + f"\n\n## {today}\n" + entry + content[first_date_idx:]
+            _CHANGELOG_PATH.write_text(new_content, encoding="utf-8")
+        return
+
+    after_date = date_idx + len(date_marker)
+    next_phase_idx = content.find("\n### ", after_date)
+    if next_phase_idx == -1:
+        _CHANGELOG_PATH.write_text(content + entry, encoding="utf-8")
+    else:
+        new_content = content[:next_phase_idx] + entry + content[next_phase_idx:]
+        _CHANGELOG_PATH.write_text(new_content, encoding="utf-8")
+
+    print(f"Full results saved to: {RESULTS_PATH}")
+    print(f"CHANGELOG 기록 완료: {_CHANGELOG_PATH}")
 
 
 # ---------------------------------------------------------------------------
@@ -298,8 +341,11 @@ async def main() -> None:
     _print_results_table(results)
 
     # 5. Save full results to backend/scripts/results.json
+    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     RESULTS_PATH.write_text(json.dumps(results, indent=2, ensure_ascii=False))
-    print(f"Full results saved to: {RESULTS_PATH}")
+
+    # 6. CHANGELOG에 URL 기록
+    _append_urls_to_changelog(results, image_url)
 
 
 if __name__ == "__main__":
