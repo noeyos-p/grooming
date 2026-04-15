@@ -9,5 +9,8 @@ Pillow==10.4.0
 pillow-heif==0.18.0
 google-genai
 google-cloud-aiplatform>=1.70.0
+numpy>=1.26.0
+opencv-python-headless>=4.9.0
 pytest
 pytest-asyncio
+fal-client>=0.13.2

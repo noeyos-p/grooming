@@ -18,51 +18,10 @@ from vertexai.preview.vision_models import ImageGenerationModel
 from vertexai.preview.vision_models import Image as VertexImage
 
 from services import style_prompts
+from services.image_utils import _convert_to_jpeg_if_needed, _detect_mime_type
 from services.vertex_imagen_training import get_imagen_entry
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# 헬퍼 — MIME 타입 감지 (gemini_pipeline.py와 동일한 로직)
-# ---------------------------------------------------------------------------
-
-def _detect_mime_type(image_bytes: bytes) -> str:
-    """이미지 bytes의 magic number로 MIME 타입을 감지한다.
-
-    HEIC, JPEG, PNG, WEBP를 지원하며, 알 수 없는 경우 image/jpeg를 반환한다.
-    """
-    if image_bytes[:4] == b"\x89PNG":
-        return "image/png"
-    if image_bytes[:3] in (b"\xff\xd8\xff",):
-        return "image/jpeg"
-    if image_bytes[:4] in (b"RIFF",) and image_bytes[8:12] == b"WEBP":
-        return "image/webp"
-    # HEIC/HEIF: ftyp box (bytes 4-8 = "ftyp", bytes 8-12 = "heic"/"heix" 등)
-    if len(image_bytes) >= 12 and image_bytes[4:8] == b"ftyp":
-        return "image/heic"
-    return "image/jpeg"
-
-
-def _convert_to_jpeg_if_needed(image_bytes: bytes) -> tuple[bytes, bool]:
-    """HEIC 등 비표준 포맷을 JPEG로 변환한다. JPEG/PNG는 그대로 반환.
-
-    Returns:
-        (변환 후 bytes, 변환 여부 bool)
-    """
-    mime = _detect_mime_type(image_bytes)
-    if mime == "image/heic":
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="JPEG", quality=95)
-            logger.info("[vertex_imagen_pipeline] HEIC → JPEG 변환 완료")
-            return buf.getvalue(), True
-        except Exception as exc:
-            logger.warning(
-                "[vertex_imagen_pipeline] HEIC → JPEG 변환 실패: %s — 원본 bytes 사용", exc
-            )
-    return image_bytes, False
 
 
 # ---------------------------------------------------------------------------

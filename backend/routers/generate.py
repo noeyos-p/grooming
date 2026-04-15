@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 
 from models.breed import GenerateRequest, GenerateResponse
 from services.gemini_pipeline import run_gemini_pipeline
+from services.inpaint_pipeline import run_inpaint_pipeline
 from services.style_prompts import get_prompt
 from services.vertex_imagen_pipeline import run_vertex_imagen_pipeline
 from services.vertex_imagen_training import get_imagen_entry
@@ -58,7 +59,8 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
                 style_id=request.style_id,
             )
         else:
-            logger.info("[generate] Gemini 파이프라인 선택 (fallback)")
+            # Gemini 파이프라인 (features_bbox 합성 포함) — 구도 유지로 자연스러운 얼굴 보존
+            logger.info("[generate] Gemini 파이프라인 선택")
             result_url = await run_gemini_pipeline(
                 image_url=request.image_url,
                 breed_id=request.breed_id,

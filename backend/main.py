@@ -11,7 +11,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import breeds, generate, admin
+from routers import breeds, generate
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,7 +40,6 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 app.include_router(breeds.router)
 app.include_router(generate.router)
-app.include_router(admin.router)
 
 
 # ---------------------------------------------------------------------------

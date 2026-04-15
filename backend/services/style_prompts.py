@@ -9,7 +9,7 @@ BREEDS: dict[str, dict] = {
         "styles": {
             "teddy_cut": {
                 "name": "테디베어컷",
-                "prompt": "maltese dog with teddy bear cut grooming style, fluffy round face, soft white fur trimmed evenly, professional grooming, clean white coat, cute teddy bear appearance",
+                "prompt": "maltese dog with teddy bear cut grooming style, fluffy round face, fur trimmed evenly into round shape, professional grooming, cute teddy bear appearance",
                 "negative_prompt": "messy, dirty, ungroomed, long flowing hair",
                 "trigger_word": "GRMDMALTTEDD",
                 "reference_images_gcs": None,
