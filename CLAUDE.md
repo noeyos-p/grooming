@@ -62,6 +62,8 @@ cd backend && source venv/bin/activate && uvicorn main:app --reload  # http://lo
 
 **테스트 이미지:** 모든 테스트는 항상 `~/Downloads/IMG_7641.jpg` 를 사용할 것
 
+**테스트 결과 기록:** 수동 테스트 스크립트(`run_*.py`) 실행 후 수치 결과를 반드시 루트 `TEST_RESULTS.md`의 해당 섹션 표에 추가할 것
+
 **배포:** Frontend → Vercel (main 브랜치 자동 배포) · Backend → Railway/Render
 
 ---

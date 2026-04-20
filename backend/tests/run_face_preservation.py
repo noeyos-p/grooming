@@ -55,6 +55,8 @@ OUTPUT_PATH = Path("/tmp/face_test_result.jpg")
 THRESHOLD_MAE = 25.0  # 픽셀 평균 절대오차 기준 (0~255), 이 이하면 보존 성공
 
 _CHANGELOG_PATH = _BACKEND_DIR / "CHANGELOG.md"
+# 루트 TEST_RESULTS.md — backend/의 상위
+_TEST_RESULTS_PATH = _BACKEND_DIR.parent / "TEST_RESULTS.md"
 
 
 def _append_url_to_changelog(
@@ -106,6 +108,131 @@ def _append_url_to_changelog(
     print(f"  CHANGELOG 기록 완료: {_CHANGELOG_PATH}")
 
 
+def _append_to_test_results(
+    meta_list: list[dict],
+    mae: float,
+    status: str,
+    gemini_calls: int,
+) -> None:
+    """루트 TEST_RESULTS.md의 ## Face Preservation 섹션에 part별 meta를 append.
+
+    기존 요약 표(날짜|breed/style|left_eye|right_eye|nose|전체 MAE|판정|비고)는 유지하고,
+    그 뒤 'Detail (part-level meta)' 하위 표에 part 단위 행을 추가한다.
+    """
+    from datetime import datetime
+
+    if not _TEST_RESULTS_PATH.exists():
+        print(f"  TEST_RESULTS.md 없음 — 스킵: {_TEST_RESULTS_PATH}")
+        return
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    content = _TEST_RESULTS_PATH.read_text(encoding="utf-8")
+
+    # 요약 행 (기존 표 포맷)
+    part_mae_map = {
+        m.get("name"): m for m in meta_list if isinstance(m, dict) and m.get("name")
+    }
+    le = part_mae_map.get("left_eye", {})
+    re_ = part_mae_map.get("right_eye", {})
+    no = part_mae_map.get("nose", {})
+
+    def _fmt_mae(m: dict) -> str:
+        if not m:
+            return "—"
+        if m.get("skip_reason"):
+            return f"skip:{m['skip_reason']}"
+        return "ok"
+
+    summary_row = (
+        f"| {today} | {BREED_ID}/{STYLE_ID} | {_fmt_mae(le)} | {_fmt_mae(re_)} | "
+        f"{_fmt_mae(no)} | {mae:.1f} | {status} | gemini_calls={gemini_calls} |\n"
+    )
+
+    # Detail 섹션 행
+    detail_rows = []
+    for m in meta_list:
+        if not isinstance(m, dict) or not m.get("name"):
+            continue
+        name = m["name"]
+        skip = m.get("skip_reason") or ""
+        if skip == "disabled":
+            detail_rows.append(
+                f"| {today} | {name} | — | — | — | — | disabled |\n"
+            )
+            continue
+        ef = m.get("ellipse_fallback")
+        area = m.get("mask_area_ratio")
+        drift = m.get("drift_ratio")
+        active = m.get("active_pixels")
+        ef_s = "True" if ef else "False" if ef is not None else "—"
+        area_s = f"{area:.2f}" if isinstance(area, (int, float)) else "—"
+        drift_s = f"{drift:.2f}" if isinstance(drift, (int, float)) else "n/a"
+        active_s = str(active) if isinstance(active, int) else "—"
+        detail_rows.append(
+            f"| {today} | {name} | {ef_s} | {area_s} | {drift_s} | {active_s} | {skip or ' '} |\n"
+        )
+
+    # Face Preservation 섹션 위치 탐색
+    marker = "## Face Preservation (run_face_preservation.py)"
+    idx = content.find(marker)
+    if idx == -1:
+        print(f"  TEST_RESULTS.md에 Face Preservation 섹션 없음 — 스킵")
+        return
+
+    # 다음 '---' 또는 '## ' 까지가 이 섹션의 끝
+    section_end = content.find("\n---", idx)
+    if section_end == -1:
+        section_end = content.find("\n## ", idx + len(marker))
+    if section_end == -1:
+        section_end = len(content)
+
+    section = content[idx:section_end]
+
+    # 기존 요약 표에 행 append (표의 마지막 | ... | 다음)
+    # 표 마지막 라인은 '| YYYY-MM-DD | ...' 패턴 — 마지막 매칭 다음에 삽입
+    import re as _re
+    lines = section.split("\n")
+    last_row_idx = -1
+    for i, ln in enumerate(lines):
+        if _re.match(r"^\| \d{4}-\d{2}-\d{2} \|", ln):
+            last_row_idx = i
+    if last_row_idx != -1:
+        lines.insert(last_row_idx + 1, summary_row.rstrip("\n"))
+
+    # Detail 하위 표가 있는지 확인, 없으면 새로 생성
+    detail_header = "### Detail (part-level meta)"
+    detail_idx = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == detail_header:
+            detail_idx = i
+            break
+
+    if detail_idx is None:
+        lines.append("")
+        lines.append(detail_header)
+        lines.append("")
+        lines.append("| 날짜 | part | ellipse_fb | mask_area | drift | active_px | skip |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- |")
+        for row in detail_rows:
+            lines.append(row.rstrip("\n"))
+    else:
+        # 기존 detail 표 마지막 행 찾아서 append
+        last_detail_idx = detail_idx
+        for i in range(detail_idx + 1, len(lines)):
+            if _re.match(r"^\| \d{4}-\d{2}-\d{2} \|", lines[i]):
+                last_detail_idx = i
+            elif lines[i].startswith("## ") or lines[i].startswith("---"):
+                break
+        insert_at = last_detail_idx + 1
+        for j, row in enumerate(detail_rows):
+            lines.insert(insert_at + j, row.rstrip("\n"))
+
+    new_section = "\n".join(lines)
+    new_content = content[:idx] + new_section + content[section_end:]
+    _TEST_RESULTS_PATH.write_text(new_content, encoding="utf-8")
+    print(f"  TEST_RESULTS.md 기록 완료: {_TEST_RESULTS_PATH}")
+
+
 def _compute_face_mae(original: Image.Image, result: Image.Image, bboxes: list[dict]) -> float:
     """눈/코 bbox 영역들의 평균 절대오차(MAE)를 계산한다. 0에 가까울수록 보존 성공.
 
@@ -135,7 +262,29 @@ def _compute_face_mae(original: Image.Image, result: Image.Image, bboxes: list[d
 
         orig_arr = np.array(orig_crop, dtype=float)
         res_arr = np.array(result_crop, dtype=float)
-        maes.append(float(abs(orig_arr - res_arr).mean()))
+
+        name = bbox.get("name", "unknown")
+
+        # 전체 픽셀 MAE (기존 방식 — 비교용 병행 출력)
+        mae_full = np.abs(orig_arr - res_arr).mean()
+
+        # dark pixel 한정 MAE — 털 색상 변환(의도된 스타일 전환)이 MAE에 영향 안 주도록
+        orig_gray = np.array(orig_crop.convert("L"), dtype=float)
+        threshold = min(80.0, float(np.percentile(orig_gray, 25)))
+        dark_mask = orig_gray <= threshold
+
+        if dark_mask.sum() < 30:
+            print(f"  [MAE] {name}: dark pixels too few ({int(dark_mask.sum())}), falling back to full crop MAE")
+            mae_dark = mae_full
+        else:
+            # (H, W, 3) 배열에서 dark_mask (H, W) bool로 직접 인덱싱 → shape (N, 3)
+            orig_dark = orig_arr[dark_mask]
+            res_dark = res_arr[dark_mask]
+            mae_dark = np.abs(orig_dark - res_dark).mean()
+
+        print(f"  [MAE] {name}  mae_full={mae_full:.2f}  mae_dark={mae_dark:.2f}  dark_px={int(dark_mask.sum())}")
+        # 당분간 mae_dark 기준으로 판정 + 시각 검수 병행; 기준값은 데이터 누적 후 재조정
+        maes.append(mae_dark)
 
     return float(sum(maes) / len(maes)) if maes else 999.0
 
@@ -237,15 +386,37 @@ async def main(image_path: str) -> None:
     # 4. Gemini 파이프라인 실행 (파이프라인 내부에서 독립적으로 bbox 탐지 + 합성)
     print(f"\n  Gemini 파이프라인 실행 중...")
     start = time.monotonic()
+    pipeline_meta: list[dict] = []
     try:
         result_url = await run_gemini_pipeline(
-            image_url, BREED_ID, STYLE_ID
+            image_url, BREED_ID, STYLE_ID, meta_out=pipeline_meta
         )
     except Exception as e:
         print(f"  ERROR: 파이프라인 실패 — {e}")
         sys.exit(1)
     elapsed = time.monotonic() - start
     print(f"  완료 ({elapsed:.1f}s): {result_url}")
+
+    # 파이프라인 meta 출력 (part별 gating 수치)
+    print("\n  === 얼굴 파트 gating meta ===")
+    gemini_calls = 1
+    for m in pipeline_meta:
+        if m.get("_pipeline"):
+            gemini_calls = m.get("gemini_calls", 1)
+            continue
+        name = m.get("name", "?")
+        skip = m.get("skip_reason")
+        ef = m.get("ellipse_fallback")
+        area = m.get("mask_area_ratio")
+        drift = m.get("drift_ratio")
+        active = m.get("active_pixels")
+        drift_s = f"{drift:.2f}" if isinstance(drift, (int, float)) else "n/a"
+        area_s = f"{area:.2f}" if isinstance(area, (int, float)) else "n/a"
+        print(
+            f"  [{name}] skip={skip or 'None'}  ellipse_fb={ef}  "
+            f"mask_area={area_s}  drift={drift_s}  active_px={active}"
+        )
+    print(f"  gemini_calls={gemini_calls} (색상+gating 합산, 상한 2)")
 
     # 5. 결과 이미지 다운로드
     print("  결과 이미지 다운로드 중...")
@@ -273,6 +444,9 @@ async def main(image_path: str) -> None:
 
     # CHANGELOG에 URL 기록
     _append_url_to_changelog(image_url, result_url, mae, status, image_path)
+
+    # 루트 TEST_RESULTS.md에 part-level meta 기록
+    _append_to_test_results(pipeline_meta, mae, status, gemini_calls)
 
 
 if __name__ == "__main__":

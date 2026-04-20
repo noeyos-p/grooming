@@ -18,7 +18,8 @@
 
 ### 현재 파이프라인 알려진 동작
 
-- **눈·코·입 위치(bbox)는 정확하게 보존됨** — 합성 파이프라인 정상 동작 확인
+- **눈·코 위치(bbox)는 gating 통과 시 합성으로 보존됨** — mask/drift 기준 미달 샘플은 합성 스킵, Gemini 결과 유지
+- **입(mouth)은 기본 OFF** — `FACE_PRESERVE_MOUTH=False`. 원형 얼굴견에서 입안 검정/혀 분홍으로 마스크 번짐(Phase 30)
 - **털 색상 및 눈 색깔 변경 발생 중** — 스타일 변환 범위가 색상까지 영향을 줌 (미해결)
 
 ### AI 파이프라인 — 반복 실패에서 확인된 구조적 금지 규칙
@@ -28,6 +29,10 @@
 - **후처리 색상 보정 코드 재추가 금지** — `_color_correct_result()` 류 LUT·히스토그램·채널 스케일 보정은 반복 실험에서 역효과 확인. 색상 보존은 프롬프트(ABSOLUTE COLOR RULE)와 입력 제약으로 해결. 색상 측정·로그는 허용 (Phase 18–21)
 - **`style_prompts.py` 스타일 설명에 털 색상어 추가 금지** — "white fur", "black coat" 같은 색상 수식어는 Gemini가 원본 털 색을 바꾸는 원인. 색상 보존은 공통 프롬프트의 ABSOLUTE COLOR RULE에만 둔다 (Phase 16)
 - **얼굴 보존 기준: `scripts/test_face_preservation.py` 기준 MAE ≤ 25.0** — 파이프라인 수정 후 반드시 통과 확인. 기준은 눈/코 개별 파트 MAE 평균
+- **얼굴 파트 합성은 gating 우선** — ellipse fallback / mask 면적 비율 > 0.65 / drift 비율 > 0.6 / active pixels < 50 중 하나라도 해당하면 해당 파트 합성 스킵. drift 임계는 dst_parts 탐지로 paste 위치가 보정되므로 0.25보다 완화(Phase 30.1) (Phase 30, 30.1)
+- **mouth(입) 기본 보존 금지** — `FACE_PRESERVE_MOUTH=False` 가 기본. 원형 얼굴견에서 입안 검정/혀 분홍으로 마스크가 번지는 구조적 실패. 재활성화는 실측 데이터 동반 시만 (Phase 30)
+- **gating 임계값은 상수로 중앙화** — `_MIN_MASK_PIXELS`, `_MAX_MASK_AREA_RATIO`, `_MAX_DRIFT_RATIO`, `_MIN_MANDATORY_PARTS_OK` 는 `gemini_pipeline.py` 상단에만 둔다. 함수 내부 매직넘버 금지 (Phase 30)
+- **drift 계산은 비율 스케일만** — 원본→결과 bbox 중심 매핑은 `(orig_w, orig_h)→(res_w, res_h)` 선형 비율만 사용. affine/회전/perspective 금지 (Phase 14, Phase 30)
 
 ---
 

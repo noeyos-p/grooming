@@ -16,7 +16,7 @@ BREEDS: dict[str, dict] = {
             },
             "puppy_cut": {
                 "name": "퍼피컷",
-                "prompt": "maltese dog with puppy cut, short even trim all over body, clean white fluffy coat, youthful appearance, professional dog grooming",
+                "prompt": "maltese dog with puppy cut, short even trim all over body, clean fluffy coat, youthful appearance, professional dog grooming",
                 "negative_prompt": "long hair, matted, uneven cut",
                 "trigger_word": "GRMDMALTPUPP",
                 "reference_images_gcs": None,
@@ -61,21 +61,21 @@ BREEDS: dict[str, dict] = {
         "styles": {
             "round_cut": {
                 "name": "라운드컷",
-                "prompt": "bichon frise with round cut, perfectly round fluffy white head, cloud-like appearance, professional grooming, pristine white coat",
+                "prompt": "bichon frise with round cut, perfectly round fluffy head, cloud-like appearance, professional grooming, pristine coat",
                 "negative_prompt": "flat, uneven, dirty, yellow",
                 "trigger_word": "GRMDBICHROND",
                 "reference_images_gcs": None,
             },
             "puppy_cut": {
                 "name": "퍼피컷",
-                "prompt": "bichon frise with puppy cut, short fluffy white coat evenly trimmed, sweet puppy face, professional grooming",
+                "prompt": "bichon frise with puppy cut, short fluffy coat evenly trimmed, sweet puppy face, professional grooming",
                 "negative_prompt": "round poof, show style, matted",
                 "trigger_word": "GRMDBICHPUPP",
                 "reference_images_gcs": None,
             },
             "teddy_cut": {
                 "name": "테디베어컷",
-                "prompt": "bichon frise with teddy bear cut grooming, soft round face, even white fluffy coat, adorable teddy bear look",
+                "prompt": "bichon frise with teddy bear cut grooming, soft round face, even fluffy coat, adorable teddy bear look",
                 "negative_prompt": "show style, uneven, dirty",
                 "trigger_word": "GRMDBICHTEDD",
                 "reference_images_gcs": None,
@@ -217,21 +217,21 @@ BREEDS: dict[str, dict] = {
         "styles": {
             "natural_cut": {
                 "name": "자연컷",
-                "prompt": "japanese spitz with natural cut, full white double coat lightly groomed, fluffy fox-like face, elegant natural appearance",
+                "prompt": "japanese spitz with natural cut, full double coat lightly groomed, fluffy fox-like face, elegant natural appearance",
                 "negative_prompt": "shaved, heavily trimmed, dirty",
                 "trigger_word": "GRMDSPITZNATU",
                 "reference_images_gcs": None,
             },
             "round_cut": {
                 "name": "라운드컷",
-                "prompt": "japanese spitz with round cut, rounded fluffy silhouette, white coat trimmed to even round shape, professional grooming",
+                "prompt": "japanese spitz with round cut, rounded fluffy silhouette, coat trimmed to even round shape, professional grooming",
                 "negative_prompt": "natural spiky, uneven, dirty",
                 "trigger_word": "GRMDSPITZROND",
                 "reference_images_gcs": None,
             },
             "bear_cut": {
                 "name": "곰돌이컷",
-                "prompt": "japanese spitz with bear cut, round teddy bear face shape, fluffy even white coat, adorable bear appearance",
+                "prompt": "japanese spitz with bear cut, round teddy bear face shape, fluffy even coat, adorable bear appearance",
                 "negative_prompt": "fox cut, pointed face, uneven",
                 "trigger_word": "GRMDSPITZBEAR",
                 "reference_images_gcs": None,
@@ -243,21 +243,21 @@ BREEDS: dict[str, dict] = {
         "styles": {
             "round_cut": {
                 "name": "라운드컷",
-                "prompt": "miniature bichon with round cut, perfectly spherical fluffy white head, cloud-like grooming, professional clean white coat",
+                "prompt": "miniature bichon with round cut, perfectly spherical fluffy head, cloud-like grooming, professional clean coat",
                 "negative_prompt": "flat, yellow, uneven, dirty",
                 "trigger_word": "GRMDMNBCROND",
                 "reference_images_gcs": None,
             },
             "teddy_cut": {
                 "name": "테디베어컷",
-                "prompt": "miniature bichon with teddy bear cut, soft round face, even fluffy white coat, adorable teddy bear look",
+                "prompt": "miniature bichon with teddy bear cut, soft round face, even fluffy coat, adorable teddy bear look",
                 "negative_prompt": "show style, uneven, dirty",
                 "trigger_word": "GRMDMNBCTEDD",
                 "reference_images_gcs": None,
             },
             "puppy_cut": {
                 "name": "퍼피컷",
-                "prompt": "miniature bichon with puppy cut, short fluffy white coat, sweet puppy appearance, professional grooming",
+                "prompt": "miniature bichon with puppy cut, short fluffy coat, sweet puppy appearance, professional grooming",
                 "negative_prompt": "round poof show style, matted",
                 "trigger_word": "GRMDMNBCPUPP",
                 "reference_images_gcs": None,

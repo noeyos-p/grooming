@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+from typing import Optional
 
 import cloudinary
 import cloudinary.uploader
@@ -23,7 +24,7 @@ import httpx
 from google import genai
 from google.genai import types
 from google.genai.types import GenerateContentConfig, Part
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageFilter
 
 from services.image_utils import _convert_to_jpeg_if_needed, _detect_mime_type
 from services.style_prompts import get_prompt
@@ -34,6 +35,15 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
 _MODEL_GEMINI = "gemini-3.1-flash-image-preview"
 _MODEL_ANALYSIS = "gemini-2.5-flash"
+
+# 얼굴 파트 마스크 fallback 기준: blur >= 16인 활성 픽셀 개수 (alpha 총합 아님)
+_MIN_MASK_PIXELS = 50
+
+# v5 gating — 실패할 샘플은 합성하지 않는다(backend/CLAUDE.md 참조)
+FACE_PRESERVE_MOUTH = False          # 원형 얼굴견 입안 검정/혀 분홍 → 마스크 번짐, 기본 OFF
+_MAX_MASK_AREA_RATIO = 0.65          # 마스크가 bbox 65% 이상이면 털까지 번진 신호 → 스킵
+_MAX_DRIFT_RATIO = 0.6               # 원본↔결과 bbox 중심 거리 / min(원본 short side). dst_parts 탐지로 paste 위치가 보정되므로 보수적 0.25는 과엄격이었음
+_MIN_MANDATORY_PARTS_OK = 2          # 눈·코 중 2개 이상 gating이면 Gemini 재호출
 
 # 견종명 → "this dog" 치환 패턴 (Gemini의 암묵적 색상 연상 방지)
 _BREED_NAMES_PATTERN = re.compile(
@@ -133,13 +143,15 @@ async def _analyze_dog_features(image_bytes: bytes, gemini_client=None) -> str:
 
 
 
-async def _detect_face_parts_bboxes(image_bytes: bytes, gemini_client) -> list[dict]:
-    """눈(좌/우)·코 각각의 tight bbox를 float 퍼센트 좌표로 탐지한다.
+_FACE_PART_NAMES = ("left_eye", "right_eye", "nose", "mouth")
 
-    입·주둥이·턱·수염은 미용 대상이므로 탐지 대상에서 제외.
+
+async def _detect_face_parts_bboxes(image_bytes: bytes, gemini_client) -> list[dict]:
+    """눈(좌/우)·코·입 각각의 tight bbox를 float 퍼센트 좌표로 탐지한다.
+
     float 좌표(소수점 1자리)로 받아 픽셀 변환 시 round()로 정밀도 확보.
 
-    반환: [{"name": str, "xmin": px, "ymin": px, "xmax": px, "ymax": px}, ...] (원본 픽셀 단위)
+    반환: [{"name": str, "xmin": px, "ymin": px, "xmax": px, "ymax": px}, ...] (이미지 픽셀 단위)
     실패 시 빈 리스트 반환.
     """
     try:
@@ -155,13 +167,15 @@ async def _detect_face_parts_bboxes(image_bytes: bytes, gemini_client) -> list[d
             "- left_eye: ONLY the eyeball/iris of the dog's left eye (right side of image). Box edge must touch the eye rim.\n"
             "- right_eye: ONLY the eyeball/iris of the dog's right eye (left side of image). Box edge must touch the eye rim.\n"
             "- nose: ONLY the dark nose leather (the black/dark bump). Do NOT include surrounding fur.\n"
+            "- mouth: ONLY the mouth opening / lip line. Do NOT include surrounding muzzle fur.\n"
             "\n"
             "CRITICAL: Make each box as TIGHT as possible. The box should NOT include any fur around the feature.\n"
             "\n"
             'Return ONLY this JSON (no markdown, no explanation):\n'
             '{"left_eye": {"xmin": 0-100, "ymin": 0-100, "xmax": 0-100, "ymax": 0-100}, '
             '"right_eye": {"xmin": 0-100, "ymin": 0-100, "xmax": 0-100, "ymax": 0-100}, '
-            '"nose": {"xmin": 0-100, "ymin": 0-100, "xmax": 0-100, "ymax": 0-100}}\n'
+            '"nose": {"xmin": 0-100, "ymin": 0-100, "xmax": 0-100, "ymax": 0-100}, '
+            '"mouth": {"xmin": 0-100, "ymin": 0-100, "xmax": 0-100, "ymax": 0-100}}\n'
             "All values are integers from 0 to 100 representing PERCENTAGE of image dimensions. "
             "0=top-left corner, 100=bottom-right corner.\n"
             "WARNING: Do NOT return pixel coordinates (e.g. 381, 1024 etc). "
@@ -175,7 +189,7 @@ async def _detect_face_parts_bboxes(image_bytes: bytes, gemini_client) -> list[d
             # 값이 100 초과하는 경우를 픽셀 좌표로 감지
             all_vals = [
                 float(data[nm][k])
-                for nm in ("left_eye", "right_eye", "nose") if nm in data
+                for nm in _FACE_PART_NAMES if nm in data
                 for k in ("xmin", "ymin", "xmax", "ymax")
                 if isinstance(data[nm], dict) and k in data[nm]
             ]
@@ -187,7 +201,7 @@ async def _detect_face_parts_bboxes(image_bytes: bytes, gemini_client) -> list[d
                 )
                 return []  # 재시도 신호
 
-            for name in ("left_eye", "right_eye", "nose"):
+            for name in _FACE_PART_NAMES:
                 if name not in data:
                     continue
                 d = data[name]
@@ -361,39 +375,157 @@ def _color_correct_result(
         return result_bytes
 
 
-def _create_contour_mask(crop_img: Image.Image, crop_w: int, crop_h: int) -> Image.Image:
+def _create_contour_mask(
+    crop_img: "Image.Image",
+    crop_w: int,
+    crop_h: int,
+    part_name: str = "",
+) -> tuple["Image.Image", dict]:
     """크롭된 특징 이미지에서 어두운 픽셀(눈동자·코) 윤곽을 따라 블렌딩 마스크를 생성한다.
 
     전략:
-      1. 그레이스케일 변환 후 절대 기준(gray<80)과 상대 기준(하위 25%) 중 낮은 값으로 특징 감지
-      2. PIL MaxFilter로 팽창 → 윤곽 주변 확장
-      3. GaussianBlur로 경계 부드럽게 → 자연스러운 블렌딩
+      1. 3중 threshold 전략 (A: 상대 기준, B: 대비 기준, C: 최후 fallback)
+      2. connectedComponentsWithStats로 component 선택 (눈/코: 혼합 점수, 입: 면적+거리)
+      3. morphology open(보수적) → close(구멍 메우기)
+      4. PIL MaxFilter 팽창 + GaussianBlur 페더링
 
     일반 타원/사각형 마스크보다 실제 눈·코 형태에 밀착됨.
+    어두운 개에서 threshold가 낮아 active_pixels < 50 → ellipse fallback 문제 개선.
+
+    Returns:
+        (mask_img, meta): meta = {ellipse_fallback, active_pixels, mask_area_ratio, component_count}
+        meta는 gating 판정용. zeros 반환 경로는 ellipse_fallback=True.
     """
+    import cv2
     import numpy as np
 
     gray = np.array(crop_img.convert("L"), dtype=np.float32)
+    min_side = min(crop_w, crop_h)
 
-    # 절대 기준(80)과 상대 기준(하위 25%) 중 작은 값 사용:
-    #   - 흰 털 배경: 하위 25%가 여전히 밝아도 gray<80 절대 기준이 눈동자/코만 잡아냄
-    #   - 어두운 털: percentile25가 이미 낮으면 min()으로 그 값 사용 → 과포착 방지
-    threshold = min(80.0, float(np.percentile(gray, 25)))
-    dark_mask = (gray <= threshold).astype(np.uint8) * 255
+    # morphology 강도: open은 보수적(1회), close는 crop 크기 따라 1-2회
+    open_iter  = 1
+    close_iter = 1 if min_side < 40 else 2
+    morph_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
-    mask_img = Image.fromarray(dark_mask, "L")
+    # 3중 threshold 전략
+    mean_g = float(np.mean(gray))
+    std_g  = float(np.std(gray))
+    thresholds = [
+        min(80.0, float(np.percentile(gray, 25))),   # A: 기존
+        mean_g - 0.8 * std_g,                         # B: 상대 대비
+        float(np.percentile(gray, 20)),               # C: 최후 fallback
+    ]
 
-    # 팽창: 윤곽 바깥으로 10% 확장 (15%는 너무 넓어 주변 털 포함)
-    dilation_size = max(5, int(max(crop_w, crop_h) * 0.10))
+    cx_img = crop_w / 2.0
+    cy_img = crop_h / 2.0
+    chosen_mask = None
+    chosen_component_count = 0
+
+    for thr in thresholds:
+        thr = max(thr, 0.0)
+        raw = (gray <= thr).astype(np.uint8) * 255
+
+        # morphology: open(noise 제거) → close(내부 구멍 메우기)
+        cleaned = cv2.morphologyEx(raw,     cv2.MORPH_OPEN,  morph_kernel, iterations=open_iter)
+        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, morph_kernel, iterations=close_iter)
+
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(cleaned)
+        if num_labels <= 1:
+            continue
+
+        # label 0 = background 제외
+        areas   = stats[1:, cv2.CC_STAT_AREA].astype(float)
+        cent_xy = centroids[1:]
+        dists   = np.hypot(cent_xy[:, 0] - cx_img, cent_xy[:, 1] - cy_img)
+
+        if part_name == "mouth":
+            # 입: 면적 상위 2개 후보 → 중심으로부터 거리 제약 (0.6 * min_side)
+            dist_limit = 0.6 * min_side
+            candidate_idx = np.argsort(areas)[::-1][:2]
+            valid_idx = [i for i in candidate_idx if dists[i] < dist_limit]
+            if not valid_idx:
+                valid_idx = [int(np.argmin(dists))]
+            top_labels = np.array(valid_idx) + 1   # +1: background offset
+            strategy = f"mouth top2+dist_limit={dist_limit:.1f}"
+
+        else:
+            # 눈·코: 혼합 점수 = dist - alpha*sqrt(area) 최소값 선택
+            # 큰 blob이 중앙에서 조금 멀어도 작은 잡음 blob보다 선택됨
+            alpha = 0.3
+            scores = dists - alpha * np.sqrt(areas)
+            best_i = int(np.argmin(scores))
+            top_labels = np.array([best_i + 1])
+            strategy = f"eye/nose mixed_score(alpha={alpha})"
+            logger.info(
+                "[gemini_pipeline] contour_mask %s: scores=%s areas=%s dists=%s → best_i=%d",
+                part_name,
+                np.round(scores, 1).tolist(),
+                np.round(areas, 0).tolist(),
+                np.round(dists, 1).tolist(),
+                best_i,
+            )
+
+        # 로그: 선택된 component 정보
+        for i in (top_labels - 1):  # 0-indexed
+            logger.info(
+                "[gemini_pipeline] contour_mask %s: strategy=%s "
+                "selected label=%d area=%.0f centroid=(%.1f,%.1f) dist=%.1f",
+                part_name, strategy, i + 1, areas[i], cent_xy[i][0], cent_xy[i][1], dists[i],
+            )
+
+        selected = np.zeros_like(cleaned)
+        for lbl in top_labels:
+            selected[labels == lbl] = 255
+
+        if int((selected >= 16).sum()) >= _MIN_MASK_PIXELS:
+            chosen_mask = selected
+            chosen_component_count = int(num_labels - 1)
+            break
+
+    if chosen_mask is None:
+        logger.warning(
+            "[gemini_pipeline] contour_mask %s: 모든 threshold 전략 실패 → ellipse fallback",
+            part_name,
+        )
+        zeros_img = Image.fromarray(np.zeros((crop_h, crop_w), dtype=np.uint8), "L")
+        meta = {
+            "ellipse_fallback": True,
+            "active_pixels": 0,
+            "mask_area_ratio": 0.0,
+            "component_count": 0,
+        }
+        return zeros_img, meta
+
+    mask_img = Image.fromarray(chosen_mask, "L")
+
+    # 팽창 + feathering
+    # dilation 하한: min_side < 30이면 3, 그 외 5 — 작은 눈 crop에서 과팽창 방지
+    dilation_lower = 3 if min_side < 30 else 5
+    dilation_size = max(dilation_lower, int(min_side * 0.10))
     if dilation_size % 2 == 0:
         dilation_size += 1
     mask_img = mask_img.filter(ImageFilter.MaxFilter(dilation_size))
 
-    # 경계 블러: 페더링
-    blur_r = max(3, int(max(crop_w, crop_h) * 0.07))
+    # blur 하한: min_side < 30이면 2, 그 외 3 / 상한 5
+    blur_lower = 2 if min_side < 30 else 3
+    blur_r = min(5, max(blur_lower, int(min_side * 0.08)))
     mask_img = mask_img.filter(ImageFilter.GaussianBlur(radius=blur_r))
 
-    return mask_img
+    logger.info(
+        "[gemini_pipeline] contour_mask %s: dilation=%d blur_r=%d min_side=%d",
+        part_name, dilation_size, blur_r, min_side,
+    )
+
+    final_arr = np.array(mask_img, dtype=np.uint8)
+    active_pixels = int((final_arr >= 16).sum())
+    bbox_area = float(crop_w * crop_h) if crop_w and crop_h else 0.0
+    meta = {
+        "ellipse_fallback": False,
+        "active_pixels": active_pixels,
+        "mask_area_ratio": (active_pixels / bbox_area) if bbox_area else 0.0,
+        "component_count": chosen_component_count,
+    }
+    return mask_img, meta
 
 
 def _seamless_clone_part(
@@ -446,21 +578,69 @@ def _seamless_clone_part(
         return None
 
 
+def _compute_drift_ratio(
+    part: dict,
+    dst_lookup: dict,
+    orig_w: int,
+    orig_h: int,
+    res_w: int,
+    res_h: int,
+) -> float | None:
+    """원본 파트 bbox 중심을 결과 이미지 좌표로 비율 스케일 투영한 뒤
+    결과 이미지 탐지 파트 중심과의 픽셀 거리를 min(원본 short side)로 정규화한다.
+
+    비율 스케일만 사용 — affine/회전/perspective 금지(backend/CLAUDE.md Phase 14).
+    dst_parts 탐지 결과가 없으면 None.
+    """
+    dst = dst_lookup.get(part["name"])
+    if not dst:
+        return None
+
+    orig_cx = (part["xmin"] + part["xmax"]) / 2.0
+    orig_cy = (part["ymin"] + part["ymax"]) / 2.0
+    projected_cx = orig_cx / orig_w * res_w
+    projected_cy = orig_cy / orig_h * res_h
+
+    dst_cx = (dst["xmin"] + dst["xmax"]) / 2.0
+    dst_cy = (dst["ymin"] + dst["ymax"]) / 2.0
+
+    dx = projected_cx - dst_cx
+    dy = projected_cy - dst_cy
+    distance = (dx * dx + dy * dy) ** 0.5
+
+    orig_short = float(min(part["xmax"] - part["xmin"], part["ymax"] - part["ymin"]))
+    if orig_short <= 0:
+        return None
+    return distance / orig_short
+
+
 def _composite_face_parts(
     original_bytes: bytes,
     result_bytes: bytes,
     face_parts: list[dict],
+    dst_parts: list[dict] | None = None,
     padding_ratio: float = 0.06,
-) -> bytes:
+) -> tuple[bytes, list[dict]]:
     """Gemini 결과 위에 원본 얼굴 파트(눈·코·입) 픽셀을 개별 합성한다.
 
     각 파트마다 실제 어두운 픽셀 윤곽(_create_contour_mask)을 따라 마스크 생성 →
     눈·코·입 테두리를 자연스럽게 블렌딩하고 주변 털은 건드리지 않음.
 
-    실패 시 result_bytes 그대로 반환.
+    dst_parts: 결과 이미지에서 탐지한 face_parts — 제공 시 결과 이미지의 실제 파트
+               위치를 목적지로 사용 (Gemini 얼굴 이동 보정). 없으면 비율 변환 fallback.
+
+    Returns:
+        (result_bytes, meta_list):
+          meta_list[i] = {name, skip_reason, ellipse_fallback, active_pixels,
+                          mask_area_ratio, drift_ratio, component_count}
+          skip_reason: None(합성 성공) | "disabled" | "active_pixels_low" |
+                       "ellipse_fallback" | "mask_area_too_large" | "drift_too_large" |
+                       "crop_zero"
+    실패 시 (result_bytes, []) 반환.
     """
+    meta_list: list[dict] = []
     if not face_parts:
-        return result_bytes
+        return result_bytes, meta_list
 
     try:
         original = Image.open(io.BytesIO(original_bytes)).convert("RGB")
@@ -471,7 +651,16 @@ def _composite_face_parts(
 
         out = result.copy()
 
+        # 결과 이미지 탐지 결과를 이름으로 조회 (없으면 빈 dict → fallback)
+        dst_lookup = {p["name"]: p for p in (dst_parts or [])}
+
         for part in face_parts:
+            # mouth 기본 OFF — 원형 얼굴견에서 입안 검정/혀 분홍으로 마스크 번짐
+            if part["name"] == "mouth" and not FACE_PRESERVE_MOUTH:
+                logger.info("[gemini_pipeline] mouth skipped (FACE_PRESERVE_MOUTH=False)")
+                meta_list.append({"name": "mouth", "skip_reason": "disabled"})
+                continue
+
             fw = part["xmax"] - part["xmin"]
             fh = part["ymax"] - part["ymin"]
             # fw/fh가 0이면 pad도 0 → crop_w=0 방지: 최소 10px padding 보장
@@ -482,38 +671,80 @@ def _composite_face_parts(
             ox2 = min(orig_w, part["xmax"] + pad)
             oy2 = min(orig_h, part["ymax"] + pad)
 
-            # 비율 좌표 → 결과 이미지 픽셀 좌표
-            rx1 = int(ox1 / orig_w * res_w)
-            ry1 = int(oy1 / orig_h * res_h)
-            rx2 = int(ox2 / orig_w * res_w)
-            ry2 = int(oy2 / orig_h * res_h)
+            # 목적지 좌표: 결과 이미지에서 탐지한 파트 위치 우선, 없으면 비율 변환
+            dst = dst_lookup.get(part["name"])
+            if dst:
+                dst_pad = max(10, int(max(dst["xmax"] - dst["xmin"], dst["ymax"] - dst["ymin"]) * padding_ratio))
+                rx1 = max(0, dst["xmin"] - dst_pad)
+                ry1 = max(0, dst["ymin"] - dst_pad)
+                rx2 = min(res_w, dst["xmax"] + dst_pad)
+                ry2 = min(res_h, dst["ymax"] + dst_pad)
+                logger.info("[gemini_pipeline] %s 목적지: 결과 이미지 탐지 좌표 사용 (%d,%d,%d,%d)",
+                            part["name"], rx1, ry1, rx2, ry2)
+            else:
+                # fallback: 원본 좌표 비율 변환 (결과 이미지 탐지 실패 시)
+                rx1 = int(ox1 / orig_w * res_w)
+                ry1 = int(oy1 / orig_h * res_h)
+                rx2 = int(ox2 / orig_w * res_w)
+                ry2 = int(oy2 / orig_h * res_h)
+                logger.info("[gemini_pipeline] %s 목적지: 비율 변환 fallback (%d,%d,%d,%d)",
+                            part["name"], rx1, ry1, rx2, ry2)
 
             crop_w = rx2 - rx1
             crop_h = ry2 - ry1
             if crop_w <= 0 or crop_h <= 0:
                 logger.warning("[gemini_pipeline] %s 크롭 크기 0 — 스킵", part["name"])
+                meta_list.append({"name": part["name"], "skip_reason": "crop_zero"})
                 continue
 
             part_crop = original.crop((ox1, oy1, ox2, oy2))
             part_crop_resized = part_crop.resize((crop_w, crop_h), Image.LANCZOS)
 
-            # 실제 윤곽 기반 마스크: 어두운 픽셀(눈·코·입) 형태를 감지해 테두리 따라 블렌딩
-            part_mask = _create_contour_mask(part_crop_resized, crop_w, crop_h)
+            # 실제 윤곽 기반 마스크 + meta (gating 판정용)
+            part_mask, mask_meta = _create_contour_mask(
+                part_crop_resized, crop_w, crop_h, part_name=part["name"]
+            )
 
-            # Poisson seamless cloning 시도 — 경계 색상 불일치 자동 보정
-            cloned = _seamless_clone_part(out, part_crop_resized, part_mask, rx1, ry1, rx2, ry2)
-            if cloned is not None:
-                out = cloned
-                logger.info(
-                    "[gemini_pipeline] %s 합성 (seamless clone) — orig(%d,%d,%d,%d) → result(%d,%d,%d,%d)",
-                    part["name"], ox1, oy1, ox2, oy2, rx1, ry1, rx2, ry2,
+            # drift 계산: 원본↔결과 bbox 중심 비율 스케일 투영 후 거리/짧은변 정규화
+            drift_ratio = _compute_drift_ratio(part, dst_lookup, orig_w, orig_h, res_w, res_h)
+            mask_meta["drift_ratio"] = drift_ratio
+
+            # Gating 판정 — 실패할 샘플은 합성하지 않는다
+            skip_reason = None
+            if mask_meta["active_pixels"] < _MIN_MASK_PIXELS:
+                skip_reason = "active_pixels_low"
+            elif mask_meta["ellipse_fallback"]:
+                skip_reason = "ellipse_fallback"
+            elif mask_meta["mask_area_ratio"] > _MAX_MASK_AREA_RATIO:
+                skip_reason = "mask_area_too_large"
+            elif drift_ratio is not None and drift_ratio > _MAX_DRIFT_RATIO:
+                skip_reason = "drift_too_large"
+
+            if skip_reason:
+                logger.warning(
+                    "[gemini_pipeline] %s gating skip: %s (active_px=%d area=%.2f drift=%s)",
+                    part["name"], skip_reason,
+                    mask_meta["active_pixels"], mask_meta["mask_area_ratio"],
+                    f"{drift_ratio:.2f}" if drift_ratio is not None else "n/a",
                 )
-            else:
+                meta_list.append({"name": part["name"], "skip_reason": skip_reason, **mask_meta})
+                continue
+
+            meta_list.append({"name": part["name"], "skip_reason": None, **mask_meta})
+
+            # 눈: paste — seamlessClone은 눈 색 변화 일으킴 (Phase 26)
+            # 코·입: seamlessClone → paste fallback
+            if part["name"] in ("left_eye", "right_eye"):
                 out.paste(part_crop_resized, (rx1, ry1), mask=part_mask)
-                logger.info(
-                    "[gemini_pipeline] %s 합성 (paste fallback) — orig(%d,%d,%d,%d) → result(%d,%d,%d,%d)",
-                    part["name"], ox1, oy1, ox2, oy2, rx1, ry1, rx2, ry2,
-                )
+                logger.info("[gemini_pipeline] %s 합성 (paste)", part["name"])
+            else:
+                cloned = _seamless_clone_part(out, part_crop_resized, part_mask, rx1, ry1, rx2, ry2)
+                if cloned is not None:
+                    out = cloned
+                    logger.info("[gemini_pipeline] %s 합성 (seamless clone)", part["name"])
+                else:
+                    out.paste(part_crop_resized, (rx1, ry1), mask=part_mask)
+                    logger.info("[gemini_pipeline] %s 합성 (paste fallback)", part["name"])
 
         if out.size != (orig_w, orig_h):
             out = out.resize((orig_w, orig_h), Image.LANCZOS)
@@ -521,11 +752,11 @@ def _composite_face_parts(
         buf = io.BytesIO()
         out.save(buf, format="JPEG", quality=95)
         logger.info("[gemini_pipeline] 얼굴 파트 합성 완료 (%d개)", len(face_parts))
-        return buf.getvalue()
+        return buf.getvalue(), meta_list
 
     except Exception as exc:
         logger.warning("[gemini_pipeline] 얼굴 파트 합성 실패, 원본 결과 반환: %s", exc)
-        return result_bytes
+        return result_bytes, meta_list
 
 
 def _is_color_acceptable(original_bytes: bytes, result_bytes: bytes) -> bool:
@@ -634,6 +865,7 @@ async def run_gemini_pipeline(
     breed_id: str,
     style_id: str,
     features_bbox: dict | None = None,
+    meta_out: list[dict] | None = None,
 ) -> str:
     """
     Gemini를 사용해 강아지 사진을 그루밍 스타일로 변환한다.
@@ -745,34 +977,43 @@ async def run_gemini_pipeline(
         logger.info("[gemini_pipeline] neutral_prompt: %s", neutral_prompt)
 
         gemini_prompt = (
-            # 색상 보존을 맨 앞에 배치 — 스타일 프롬프트의 색상 묘사를 완전히 덮어씀
-            f"ABSOLUTE COLOR RULE (highest priority — overrides all style descriptions below):\n"
+            # 미용 적용을 첫 번째 지시로 배치 — Gemini가 "스타일 변환 작업"임을 첫 줄에서 인식
+            "TASK: Apply the grooming style below to this dog photo.\n"
+            "The dog's pose, position, and background must remain EXACTLY unchanged — only the fur/coat is modified.\n\n"
+            f"GROOMING STYLE TO APPLY (shape/cut/texture only — color is handled separately):\n{neutral_prompt}\n\n"
+            "GROOMING REQUIREMENTS:\n"
+            "1. The grooming style MUST be clearly and visibly applied to the entire body.\n"
+            "2. Change the fur cut shape, length, and texture according to the style above.\n"
+            "3. The muzzle, beard, and face fur area must also match the grooming style.\n"
+            "4. DO NOT change the dog's pose, body position, head angle, or background.\n"
+            "5. DO NOT move the dog or alter its sitting/standing position in any way.\n\n"
+            # 색상 규칙: 스타일 변경을 막지 않는다는 점을 명시
+            f"COLOR RULE (applies only to fur/coat color — does NOT restrict the style change):\n"
             f"{color_clause}\n"
-            "Any color word in the grooming style description (white, grey, cream, etc.) must be IGNORED. "
-            "Apply ONLY the shape and cut style, NOT the color.\n\n"
-            f"GROOMING STYLE TO APPLY (shape/cut/texture only):\n{neutral_prompt}\n\n"
-            "ADDITIONAL REQUIREMENTS:\n"
-            "1. Keep the dog's exact pose, position, and background EXACTLY unchanged (no color shift on background).\n"
-            "2. Eyes (shape/color) and nose (shape/color): UNCHANGED — preserve these exactly.\n"
-            "3. Change the fur cut style, fur length, fur texture, and grooming shape for the ENTIRE body including the muzzle/beard area.\n"
-            "4. The muzzle fur and beard area MUST also be groomed to match the target style.\n"
-            "5. The overall dog identity, face proportions, and expression must match the original photo exactly."
+            "Any color word in the grooming style description must be IGNORED for color. "
+            "Apply the shape and cut only; the color above takes precedence.\n\n"
+            "FEATURES TO PRESERVE EXACTLY:\n"
+            "- Eyes (shape, color, position): UNCHANGED\n"
+            "- Nose (shape, color, position): UNCHANGED\n"
+            "- Dog identity, face proportions, expression: UNCHANGED"
         )
 
         if analysis:
             enhanced_prompt = (
-                f"{gemini_prompt}\n\n"
-                f"ORIGINAL DOG FEATURES TO PRESERVE EXACTLY:\n{analysis}\n\n"
-                "RULE: Preserve ALL features listed above. Change ONLY the fur cut style and length."
+                f"{gemini_prompt}\n"
+                f"- Original features: {analysis}"
             )
         else:
             enhanced_prompt = gemini_prompt
 
-        # 6. Gemini API 호출 (색상 품질 불량 시 최대 1회 재시도)
+        # 6. Gemini API 호출 (색상 불량 + gating 합산 최대 2회 상한: retry_budget)
+        retry_budget = 2
+        gemini_calls = 1
         result_bytes = await _run_gemini(image_bytes, enhanced_prompt, gemini_client)
-        if not _is_color_acceptable(image_bytes, result_bytes):
+        if not _is_color_acceptable(image_bytes, result_bytes) and gemini_calls < retry_budget:
             logger.warning("[gemini_pipeline] 색상 품질 불량 — 재시도 (1회)")
             result_bytes = await _run_gemini(image_bytes, enhanced_prompt, gemini_client)
+            gemini_calls += 1
             if _is_color_acceptable(image_bytes, result_bytes):
                 logger.warning("[gemini_pipeline] 재시도 성공 — 색상 OK")
             else:
@@ -782,10 +1023,37 @@ async def run_gemini_pipeline(
         # 히스토그램 LUT는 Gemini가 색을 크게 바꿀수록 역효과.
         # 색상 보존은 프롬프트(ABSOLUTE COLOR RULE + RGB 실측값) + 재시도로 대응.
 
-        # 6-2. 눈·코 개별 하드 합성 — 주둥이 털은 Gemini 미용 결과 유지
+        # 6-2. 결과 이미지에서 face parts 탐지 → 얼굴 파트 합성 (gating 포함)
+        meta_list: list[dict] = []
         if face_parts:
-            result_bytes = _composite_face_parts(image_bytes, result_bytes, face_parts)
+            dst_parts = await _detect_face_parts_bboxes(result_bytes, gemini_client)
+            if dst_parts:
+                logger.info("[gemini_pipeline] 결과 이미지 face parts 탐지 성공: %d개", len(dst_parts))
+            else:
+                logger.warning("[gemini_pipeline] 결과 이미지 face parts 탐지 실패 — 비율 변환 fallback 사용")
+            result_bytes, meta_list = _composite_face_parts(
+                image_bytes, result_bytes, face_parts, dst_parts
+            )
             logger.info("[gemini_pipeline] 얼굴 파트 합성 완료")
+
+            # Gate-fail 재호출: mandatory(eyes + nose) 중 _MIN_MANDATORY_PARTS_OK 이상 skip
+            mandatory = {"left_eye", "right_eye", "nose"}
+            skipped_mandatory = {
+                m["name"] for m in meta_list
+                if m.get("skip_reason") and m["name"] in mandatory
+            }
+            if len(skipped_mandatory) >= _MIN_MANDATORY_PARTS_OK and gemini_calls < retry_budget:
+                logger.warning(
+                    "[gemini_pipeline] gate retry 발동 — skipped=%s (mandatory %d개 이상)",
+                    skipped_mandatory, _MIN_MANDATORY_PARTS_OK,
+                )
+                result_bytes = await _run_gemini(image_bytes, enhanced_prompt, gemini_client)
+                gemini_calls += 1
+                dst_parts = await _detect_face_parts_bboxes(result_bytes, gemini_client)
+                result_bytes, meta_list = _composite_face_parts(
+                    image_bytes, result_bytes, face_parts, dst_parts
+                )
+                logger.info("[gemini_pipeline] gate retry 후 얼굴 파트 합성 재수행")
 
         # 7. Cloudinary 업로드
         logger.info("[gemini_pipeline] Cloudinary 업로드 시작")
@@ -796,6 +1064,11 @@ async def run_gemini_pipeline(
         )
         result_url: str = upload_result["secure_url"]
         logger.info("[gemini_pipeline] Cloudinary 업로드 완료: %s", result_url)
+
+        # meta_out 는 테스트/디버그용 side-channel (hot path 변경 없음)
+        if meta_out is not None:
+            meta_out.extend(meta_list)
+            meta_out.append({"_pipeline": True, "gemini_calls": gemini_calls})
 
         return result_url
 

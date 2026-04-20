@@ -1,11 +1,44 @@
 # Backend Changelog
 
 <!--
+
+## 2026-04-20
+
+**[face-preservation] 2026-04-20 13:44** — `IMG_7641.jpg` / `maltese/teddy_cut`
+- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660185/grooming-style/uploads/k8a84nkds9jqafm6koam.jpg
+- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660263/grooming-results/ittaiq8ekpyjxvvbieng.jpg
+- MAE: 26.5 / 기준 25.0 [FAIL]
+
 ## 작성 가이드
 
 **정렬**: 최신 날짜가 맨 위 · 같은 날짜 안에서도 최신 Phase가 위 (번호 높을수록 위)
 
 **Phase 템플릿**
+
+**[face-preservation] 2026-04-20 13:48** — `IMG_7641.jpg` / `maltese/teddy_cut`
+- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660433/grooming-style/uploads/iej1zyd0r3o3qwtk2yi9.jpg
+- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660526/grooming-results/qohwixarzm6mhxzb0fvs.jpg
+- MAE: 73.9 / 기준 25.0 [FAIL]
+
+**[face-preservation] 2026-04-20 14:00** — `IMG_7641.jpg` / `maltese/teddy_cut`
+- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776661150/grooming-style/uploads/ursgozk2pdohr0zepv6s.jpg
+- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776661229/grooming-results/fjt6s5lhrb8qjhdninvf.jpg
+- MAE: 14.8 / 기준 25.0 [PASS]
+
+**[face-preservation] 2026-04-20 14:27** — `IMG_7641.jpg` / `maltese/teddy_cut`
+- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776662763/grooming-style/uploads/ixglbspcr7llyrkszktj.jpg
+- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776662862/grooming-results/anq8lv6koseau5xxhtie.jpg
+- MAE: 14.0 / 기준 25.0 [PASS]
+
+**[face-preservation] 2026-04-20 14:43** — `IMG_7641.jpg` / `maltese/teddy_cut`
+- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776663712/grooming-style/uploads/sieru25gwbdwu693x6jd.jpg
+- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776663805/grooming-results/ukxxriwrmlfjgzhjlkzn.jpg
+- MAE: 88.5 / 기준 25.0 [FAIL]
+
+**[face-preservation] 2026-04-20 14:45** — `IMG_7641.jpg` / `maltese/teddy_cut`
+- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776663881/grooming-style/uploads/xayu3k76xj0cb4xhnzfr.jpg
+- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776663954/grooming-results/sps7jennvi1j2r1qrbta.jpg
+- MAE: 53.1 / 기준 25.0 [FAIL]
 
 ### N. 제목 — 한 줄로 무슨 작업인지 명시
 
@@ -81,11 +114,250 @@ flowchart TD
 
 ---
 
+## 2026-04-20
+
+### 30.1 — drift 임계값 완화 (0.25 → 0.6)
+
+**배경**
+- Phase 30 적용 후 첫 테스트(`~/Downloads/IMG_7641.jpg`, maltese/teddy_cut)에서 눈 양쪽 모두 drift 0.35~0.49로 `drift_too_large` skip 발동 → 눈 합성 실패, nose만 합성된 하이브리드 결과.
+- 사용자 피드백: "주둥이 부분만 가져온 것 같고 눈·입·코는 다 변함".
+- 분석: drift가 크다는 건 Gemini가 얼굴 위치를 이동시켰다는 신호. 합성은 `dst_parts` 탐지 결과(결과 이미지의 실제 눈 위치)에 paste 하므로 drift가 커도 위치는 보정됨. 0.25 임계는 과보수적.
+
+**변경**
+- `services/gemini_pipeline.py` — `_MAX_DRIFT_RATIO` 0.25 → 0.6. 주석에 "dst_parts 탐지로 paste 위치가 보정되므로 보수적 0.25는 과엄격이었음" 추가.
+
+**테스트 결과 (2026-04-20 재실행)**
+- 결과 URL: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776663954/grooming-results/sps7jennvi1j2r1qrbta.jpg
+- Gating meta (모두 skip=None, 합성 성공):
+  - `left_eye`: drift=0.38, mask_area=0.55, active_px=1110
+  - `right_eye`: drift=0.40, mask_area=0.52, active_px=1049
+  - `nose`: drift=0.04, mask_area=0.29, active_px=1519
+  - `mouth`: disabled
+- `gemini_calls=1` (재호출 없이 한 번에 통과)
+
+**사용자 관찰 (다음 단계 과제)**
+- 이전 결과 대비 훨씬 자연스러워짐.
+- 눈: 합성되었으나 "합성 복사본이 눈 위에 떠 있는" 느낌이 있음 → 원본 눈 크롭이 dst 영역 안에서 주변 털과 경계가 어긋나 붙은 상태로 추정. 후속 개선 과제.
+- 코: 합성 성공, 다만 크기가 다소 크게 paste됨 → `nose` bbox padding이 넓거나 원본 bbox 자체가 크게 탐지된 영향. 후속 개선 과제.
+- 입: `FACE_PRESERVE_MOUTH=False` 정책 유지. Gemini 결과 그대로.
+- 전체적으로 "가능한 방향"임을 확인. 미세 부자연스러움은 차차 해결.
+
+**측정 방식 메모**
+- `run_face_preservation.py`의 MAE는 "원본 bbox 좌표" 기준으로 측정 → Gemini가 얼굴을 이동시키면 원본 좌표 영역에는 변형된 털이 남아 MAE 수치는 높게 나옴(FAIL). 실제 합성물은 dst 위치로 paste되어 있음. 수치와 시각 결과가 엇갈리는 케이스 존재.
+
+---
+
+### 30. v5 얼굴 보존: gating 우선 + mouth 기본 OFF
+
+**배경**
+- 원형 얼굴·눈이 털에 파묻힌 샘플(`~/Downloads/IMG_7641.jpg`)에서 마스크 휴리스틱만으로는 구조적 seam 발생
+- 방향 전환: "합성을 더 잘 되게" 가 아니라 "실패할 샘플은 합성하지 않는다" (사용자 확정)
+
+**변경**
+- `services/gemini_pipeline.py` 상단 상수 추가: `FACE_PRESERVE_MOUTH=False`, `_MAX_MASK_AREA_RATIO=0.65`, `_MAX_DRIFT_RATIO=0.25`, `_MIN_MANDATORY_PARTS_OK=2`
+- `_create_contour_mask()` 반환 시그니처 `(Image, dict)` 로 확장 — meta: ellipse_fallback, active_pixels, mask_area_ratio, component_count
+- `_compute_drift_ratio()` 헬퍼 신설 — 비율 스케일 투영만 사용(Phase 14 금지 준수)
+- `_composite_face_parts()` 에 mouth 기본 스킵 + 4조건 gating(active_pixels_low / ellipse_fallback / mask_area_too_large / drift_too_large) 추가. 반환 `(bytes, list[dict])` 로 확장
+- `run_gemini_pipeline()` gate-fail 재호출 추가: mandatory(eyes+nose) 중 2개 이상 skip 시 1회 재호출. 색상 재시도와 합산해 최대 2회 상한(`retry_budget`). `meta_out` 파라미터로 테스트 meta 노출
+- `tests/run_face_preservation.py` 파트별 meta 출력 + 루트 `TEST_RESULTS.md` part-level detail 표 append
+
+**폐기/충돌 없음**
+- Phase 28(pyramid blend) 이미 폐기 상태 유지
+- Phase 29(ellipse fallback 시 합성 스킵)는 이번 변경에 통합(명시적 플래그화)
+
+---
+
+**[face-preservation] 2026-04-20 13:44** — `IMG_7641.jpg` / `maltese/teddy_cut`
+- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660185/grooming-style/uploads/k8a84nkds9jqafm6koam.jpg
+- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660263/grooming-results/ittaiq8ekpyjxvvbieng.jpg
+- MAE: 26.5 / 기준 25.0 [FAIL]
+
+**[face-preservation] 2026-04-20 13:48** — `IMG_7641.jpg` / `maltese/teddy_cut`
+- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660433/grooming-style/uploads/iej1zyd0r3o3qwtk2yi9.jpg
+- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660526/grooming-results/qohwixarzm6mhxzb0fvs.jpg
+- MAE: 73.9 / 기준 25.0 [FAIL]
+
+### 29. pyramid blend 롤백 + ellipse fallback 시 합성 스킵
+
+배경: Phase 28 pyramid blend 도입 실험에서 ① 흰 점 박스 아티팩트(ellipse fallback mask + pyramid blend 경계 노출) ② 얼굴 위치 이탈(bbox 정렬 실패 시 원본 파트가 털 위에 paste) 두 문제가 확인됨. Phase 28 "대안" 항목(ellipse fallback 시 합성 스킵 / 눈은 paste로 복귀)을 실행해 Phase 26 구조로 되돌리고 오-위치 합성을 방어.
+
+**수정**
+- `services/gemini_pipeline.py` — `_composite_face_parts()` 합성 분기를 Phase 26 구조로 복귀
+  - 눈(left_eye·right_eye): pyramid blend 제거 → 직접 paste
+  - 코·입(nose·mouth): seamless clone → paste fallback (pyramid blend 중간 단계 제거)
+- `services/gemini_pipeline.py` — contour mask가 비어 있으면(`active_pixels < _MIN_MASK_PIXELS`) ellipse 타원 마스크 생성 대신 `continue`로 해당 파트 합성 스킵. Gemini 결과를 그대로 유지
+- `services/gemini_pipeline.py` — `from PIL import ImageDraw` 제거 (ellipse 마스크 생성 코드 삭제로 불필요)
+
+**삭제**
+- `services/gemini_pipeline.py` — `_pyramid_blend()` 함수 전체 제거. 다른 호출처 없음 확인
+
+**트러블슈팅**
+
+> **흰 점 박스 아티팩트**
+> - 증상: 결과 이미지 눈 위치에 bbox 크기의 흰 점 박스 노출
+> - 원인: ellipse fallback mask(bbox 전체 원형)로 pyramid blend를 실행하면 bbox 경계가 합성 경계선으로 그대로 노출됨
+> - 해결: pyramid blend 제거 + ellipse fallback 트리거 시 합성 스킵
+
+> **얼굴 파트 위치 이탈 (MAE 73.9 케이스)**
+> - 증상: left_eye 크롭이 털만 잡히고(눈 없음) nose/mouth bbox도 전혀 다른 위치에 합성
+> - 원인: Gemini 결과에서 얼굴 위치가 이동했을 때 `_create_contour_mask()` 3중 threshold 전략이 모두 실패 → ellipse fallback으로 bbox 전체 원형 mask 사용 → 원본 파트 크롭이 잘못된 좌표에 paste됨
+> - 해결: ellipse fallback 조건(active_pixels < 50)에서 합성 자체를 스킵. 잘못된 위치 paste보다 Gemini 원본 유지가 안전하다는 판단
+
+**평가** _(run_face_preservation.py / `IMG_7641.jpg` / `maltese/teddy_cut`)_
+- Parts MAE 14.8 (기준 25.0) [PASS] — Phase 28 시도의 26.5·73.9 대비 대폭 개선
+- 시각 확인: 흰 점 박스 아티팩트 제거 / 얼굴 파트가 털 위에 떠 있지 않음
+
+---
+
+### 28. _create_contour_mask 3중 threshold + _pyramid_blend 도입 시도 — 실패
+
+검은 푸들처럼 어두운 개에서 `percentile(gray, 25)` ≈ 15-20 → threshold=15 → `active_pixels < 50` → ellipse fallback → 눈 위치에 금색 원형 패치 노출 문제. 이를 해결하기 위해 contour_mask를 3중 threshold 전략 + connectedComponentsWithStats 기반으로 교체하고, 눈 합성에 Laplacian pyramid blending 도입 시도.
+
+**추가**
+- `services/gemini_pipeline.py` — `_pyramid_blend()` 신규 함수 추가
+  - Laplacian pyramid blending (cv2만 사용, scipy 제거)
+  - adaptive levels: min_side < 24 → 2단계, < 48 → 3단계, 이상 → 4단계
+  - 경계 침범 시 clip ROI 처리
+  - mask_std < 0.15이면 추가 feathering 적용, 이상이면 생략
+  - 실패 시 None 반환 → 호출부 paste fallback
+- `from typing import Optional` import 추가
+
+**수정**
+- `services/gemini_pipeline.py` — `_create_contour_mask()` 전면 교체
+  - 시그니처에 `part_name: str = ""` 추가
+  - 3중 threshold 전략: A(percentile 25 + 절대 80 min) → B(mean - 0.8*std) → C(percentile 20) 순서로 시도
+  - cv2 connectedComponentsWithStats로 component 선택
+    - 눈/코: 혼합 점수 `dist - 0.3 * sqrt(area)` 최소값 선택
+    - 입: 면적 상위 2개 + 중심 거리 제약 (0.6 * min_side)
+  - morphology: open 1회(보수적) → close 1-2회(crop 크기 기반)
+  - dilation 하한: min_side < 30 → 3, 이상 → 5
+  - blur 하한: min_side < 30 → 2, 이상 → 3 / 상한 5
+  - 모든 threshold 실패 시 zeros 마스크 반환 (기존 단일 threshold 실패 시 그대로 처리하던 것 개선)
+  - component 선택 결과·feathering 파라미터 logger 출력
+- `services/gemini_pipeline.py` — `_composite_face_parts()` 합성 분기 교체
+  - `_create_contour_mask()` 호출에 `part_name=part["name"]` 추가
+  - 눈: paste → pyramid blend 우선, 실패 시 paste fallback
+  - 코·입: seamless clone 우선 → pyramid blend fallback → paste final fallback
+
+**트러블슈팅**
+
+> **pyramid_blend 브로드캐스팅 오류 — 수정**
+> - 증상: `operands could not be broadcast together with shapes (34,37,3) (34,37)`
+> - 원인: blended 루프에서 resize가 발생하지 않는 경우(shape 일치) ndim 체크가 실행되지 않아 2D mask가 3D 이미지 배열과 연산 시도
+> - 해결: `if m.ndim == 2:` 체크를 resize 분기 밖으로 이동 — 항상 3D 보장. gp_mask pyrDown 결과도 동일하게 ndim 체크 추가
+
+**시도한 접근**
+
+> **pyramid_blend 도입 — 실패 (MAE 73.9, 박스 아티팩트 발생)**
+> - 방법: 눈 합성을 paste에서 pyramid blend로 교체. ellipse fallback mask(bbox 전체 원)로도 pyramid blend 실행
+> - 결과: MAE 73.9 (이전 paste 방식 26.5보다 크게 증가). 결과 이미지 눈 위치에 흰 점 박스 아티팩트 노출. bbox 위치 이탈(left_eye 크롭이 털만 잡힘)
+> - 원인: ① ellipse fallback mask로 pyramid blend를 실행하면 bbox 전체 경계가 합성 경계선으로 노출됨 ② bbox 정렬 실패(Gemini 결과에서 얼굴 위치 이동)는 합성 방식 교체로 해결 불가 ③ pyramid blend가 눈 원본 픽셀 정보를 희석시킴
+> - 대안: ① ellipse fallback 시 합성 스킵 ② 눈은 이전처럼 paste로 되돌리기
+
+---
+
 ## 2026-04-15
 
 **현재 파이프라인 상태 (2026-04-15)**
 - 털 색상 및 눈 색깔이 원본과 달라지는 현상 확인 (스타일 변환 의도 범위 초과)
 - 눈·코·입 위치(bbox 좌표)는 정확하게 보존됨
+
+---
+
+**[face-preservation] 2026-04-15 15:38** — `IMG_7641.jpg` / `maltese/teddy_cut`
+- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776235081/grooming-style/uploads/rbfunhb8ikljiovwiykf.jpg
+- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776235129/grooming-results/rlsuckws1k7loc280twx.jpg
+- MAE: 17.7 / 기준 25.0 [PASS]
+
+**[face-preservation] 2026-04-15 15:50** — `IMG_7641.jpg` / `maltese/teddy_cut`
+- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776235754/grooming-style/uploads/ao3vwvjsmbnqbn5qvgth.jpg
+- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776235842/grooming-results/fo1urob8el4drn0tvtg3.jpg
+- MAE: 64.6 / 기준 25.0 [FAIL]
+
+### 27. 얼굴 파트 합성 좌표 불일치 수정 + 입 탐지 추가
+
+**배경**: 원본 이미지에서 탐지한 눈·코 bbox 좌표를 결과 이미지에 단순 비율 변환으로 적용하고 있었음.
+Gemini 생성 결과에서 얼굴 위치가 조금이라도 달라지면 눈·코가 엉뚱한 위치에 붙는 구조적 문제.
+또한 입(mouth)은 탐지·합성 대상에서 아예 빠져 AI 생성본이 그대로 남는 문제.
+
+**수정**
+- `services/gemini_pipeline.py` — `_detect_face_parts_bboxes()` mouth 탐지 추가
+  - 탐지 파트: left_eye·right_eye·nose → left_eye·right_eye·nose·mouth
+  - JSON 반환 포맷·프롬프트·`_parse_parts()` 순회에 `"mouth"` 추가
+  - 공통 파트명을 `_FACE_PART_NAMES` 상수로 분리
+- `services/gemini_pipeline.py` — `_composite_face_parts()` `dst_parts` 파라미터 추가
+  - 결과 이미지에서 탐지한 face_parts를 목적지 좌표로 사용 (Gemini 얼굴 이동 보정)
+  - `dst_lookup`: 이름으로 매칭 후 결과 이미지 실제 파트 위치를 destination으로 적용
+  - 결과 이미지 탐지 실패 시 기존 비율 변환 fallback 유지
+- `services/gemini_pipeline.py` — `run_gemini_pipeline()` 결과 이미지 face parts 탐지 추가
+  - Gemini 생성 후 `_detect_face_parts_bboxes(result_bytes, gemini_client)` 호출 → `dst_parts`
+  - `_composite_face_parts(image_bytes, result_bytes, face_parts, dst_parts)` 로 전달
+
+**트러블슈팅**
+> **테스트 1회차 회색화 + right_eye contour mask empty — FAIL (MAE 64.6)**
+> - 증상: Gemini가 회색 개를 생성(회색화), right_eye mask active_px=0
+> - 원인: ① 회색화는 Gemini 생성 품질 문제 (색상 보존 실패, 기존 미해결 이슈)
+>          ② right_eye dst bbox(55×56px)가 너무 작아 contour mask가 비었다고 판정 → ellipse fallback
+> - 상태: 색상이 정상인 결과로 재평가 필요
+
+---
+
+### 26. 눈 합성 방식 변경 — seamlessClone → paste (눈 색 보존)
+
+**배경**: seamlessClone은 source-destination 색 차이가 클 때 source 색을 destination 쪽으로 tint시키는 알려진 동작이 있다.
+Gemini 생성 결과에서 눈 주변 털 색이 원본과 다르면, Poisson 경계 보정 과정에서 원본 눈 색까지 끌려가 눈 색이 변하는 문제가 발생했다.
+
+**수정**
+- `services/gemini_pipeline.py` — `_composite_face_parts()` 파트별 합성 분기 추가
+  - `left_eye`, `right_eye`: seamlessClone 건너뛰고 contour mask alpha paste 직접 사용
+  - `nose`: 기존과 동일 — seamlessClone 먼저, 실패 시 paste fallback
+
+**평가** _(IMG_7641.jpg / maltese/teddy_cut)_
+- MAE 17.7 / 기준 25.0 → PASS (최초 측정 — seamlessClone 제거 후)
+
+---
+
+### 25. 미용 스타일 적용 강화 + 얼굴 파트 복원 신뢰성 개선
+
+**배경**: 결과 이미지에서 미용 스타일이 거의 반영되지 않고 눈·코·입이 Gemini에 의해 바뀌는 문제.
+원인: ① style_prompts.py에 색상 수식어 잔존 → ABSOLUTE COLOR RULE과 충돌하여 Gemini가 스타일 적용을 억제,
+② 프롬프트가 색상 보존 규칙으로 시작하여 Gemini가 "변경 최소화"로 해석,
+③ contour mask가 비어 있을 때 (bbox가 털 위에 착지) 얼굴 파트 복원이 no-op으로 끝나는 구조적 문제.
+
+**수정**
+- `services/style_prompts.py` — 색상 수식어 10건 제거 (Phase 16 규칙 이행)
+  - maltese/puppy_cut: `clean white fluffy coat` → `clean fluffy coat`
+  - bichon/round_cut: `fluffy white head`, `pristine white coat` → `fluffy head`, `pristine coat`
+  - bichon/puppy_cut, teddy_cut: `short/even fluffy white coat` → `short/even fluffy coat`
+  - spitz/natural_cut, round_cut, bear_cut: `white double coat`, `white coat`, `white coat` 제거
+  - mini_bichon/round_cut, teddy_cut, puppy_cut: 동일 패턴 제거
+- `services/gemini_pipeline.py` — `enhanced_prompt` 재구성
+  - `TASK:` 절로 시작 → Gemini가 "스타일 변환 작업"임을 첫 줄에서 인식
+  - `GROOMING REQUIREMENTS` 1번: "MUST be clearly and visibly applied" 명시
+  - 강아지 자세·위치를 바꾸지 않는다는 요건(4·5번) 명시
+  - COLOR RULE을 GROOMING 뒤로 이동 + "does NOT restrict the style change" 단서 추가
+  - `ABSOLUTE COLOR RULE` 헤더 제거 — 스타일 전체를 덮어쓰는 인상 제거
+- `services/gemini_pipeline.py` — 빈 마스크 타원 fallback 추가 (`_composite_face_parts()`)
+  - `_create_contour_mask()` 결과에서 `active_pixels = (mask_arr >= 16).sum()`으로 픽셀 개수 계산 (alpha 총합 아님)
+  - `active_pixels < _MIN_MASK_PIXELS(50)` 이면 bbox 전체를 채우는 타원 마스크로 강제 복원
+  - 경고 로그에 파트명·active_px·bbox 좌표·크기 포함
+- `tests/run_face_preservation.py` — `_compute_face_mae()` dark pixel 한정 MAE 추가
+  - `mae_full` (전체 픽셀, 기존 방식)과 `mae_dark` (dark pixel 한정) 모두 출력
+  - threshold: `min(80.0, percentile25)` — `_create_contour_mask()`와 동일 기준
+  - 판정은 `mae_dark` 기준 (잠정); 기준값 25.0은 데이터 누적 후 재조정 예정
+
+**트러블슈팅**
+> **ellipse fallback 추가·제거·재추가 반복 - 실패**
+> - 증상: 사용자가 "코드 바꾸기 전 눈·코·입 위치가 괜찮았다"고 하여 fallback 제거 시도
+> - 원인: 실제로는 기존 코드도 mask empty 시 no-op이었고, fallback이 없으면 Gemini 변경 결과가 그대로 노출됨
+> - 해결: fallback 재추가. `mask_arr.sum()` (alpha 총합) 대신 `(mask_arr >= 16).sum()` (픽셀 개수) 사용
+
+> **mask_sum vs active_pixels 판정 오류**
+> - 증상: 초기 구현에서 `np.array(part_mask).sum()` 사용 — grayscale 총합이라 255짜리 픽셀 1개만 있어도 기준 50 초과
+> - 원인: MIN_MASK_PIXELS 이름이 "픽셀 수"를 의미하지만 sum()은 알파 총합
+> - 해결: `(mask_arr >= 16).sum()`으로 실제 활성 픽셀 개수 비교
+
+---
 
 ### 24. 얼굴 파트 합성 방식 교체 — PIL alpha-blend → Poisson Seamless Cloning
 
