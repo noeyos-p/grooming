@@ -28,6 +28,7 @@ from PIL import Image, ImageFilter
 
 from services.image_utils import _convert_to_jpeg_if_needed, _detect_mime_type
 from services.style_prompts import get_prompt
+from services.tracing import sanitize_bytes_output, sanitize_inputs, traceable
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,14 @@ _MIN_MASK_PIXELS = 50
 FACE_PRESERVE_MOUTH = False          # 원형 얼굴견 입안 검정/혀 분홍 → 마스크 번짐, 기본 OFF
 _MAX_MASK_AREA_RATIO = 0.65          # 마스크가 bbox 65% 이상이면 털까지 번진 신호 → 스킵
 _MAX_DRIFT_RATIO = 0.6               # 원본↔결과 bbox 중심 거리 / min(원본 short side). dst_parts 탐지로 paste 위치가 보정되므로 보수적 0.25는 과엄격이었음
-_MIN_MANDATORY_PARTS_OK = 2          # 눈·코 중 2개 이상 gating이면 Gemini 재호출
+# Phase 30.2 — Gemini 재호출 제거. 기존 `_MIN_MANDATORY_PARTS_OK`(gate-fail 재호출 임계)는 더 이상 사용하지 않음
+
+# Phase 30.2 — 파트별 crop/mask 계수 (눈 "떠 있는" 현상 완화 + 코 확대 방지)
+_EYE_PADDING_RATIO = 0.03            # 눈 크롭 패딩: 주변 털 면적 최소화 (기본 0.06의 절반)
+_DEFAULT_PADDING_RATIO = 0.06        # 눈 외 파트 기본 패딩
+_EYE_MASK_BLUR_COEF = 0.15           # 눈 마스크 feathering 계수 (경계 페이드아웃 범위 확대)
+_DEFAULT_MASK_BLUR_COEF = 0.08       # 눈 외 파트 기본 blur 계수
+_EYE_MASK_BLUR_MAX = 8               # 눈 blur 상한 (기본 5 → 8)
 
 # 견종명 → "this dog" 치환 패턴 (Gemini의 암묵적 색상 연상 방지)
 _BREED_NAMES_PATTERN = re.compile(
@@ -54,6 +62,11 @@ _BREED_NAMES_PATTERN = re.compile(
 )
 
 
+@traceable(
+    run_type="tool",
+    name="extract_dominant_fur_colors",
+    process_inputs=sanitize_inputs,
+)
 def _extract_dominant_fur_colors(image_bytes: bytes) -> str:
     """이미지 bytes에서 주요 털 색상을 추출해 프롬프트용 문자열로 반환한다.
 
@@ -107,6 +120,12 @@ def _extract_dominant_fur_colors(image_bytes: bytes) -> str:
 
 
 
+@traceable(
+    run_type="llm",
+    name="gemini_analyze_dog_features",
+    metadata={"model": _MODEL_ANALYSIS},
+    process_inputs=sanitize_inputs,
+)
 async def _analyze_dog_features(image_bytes: bytes, gemini_client=None) -> str:
     """
     gemini-2.5-flash (텍스트 모델)로 원본 강아지 이미지의 핵심 특징을 분석합니다.
@@ -146,6 +165,12 @@ async def _analyze_dog_features(image_bytes: bytes, gemini_client=None) -> str:
 _FACE_PART_NAMES = ("left_eye", "right_eye", "nose", "mouth")
 
 
+@traceable(
+    run_type="llm",
+    name="gemini_detect_face_parts_bboxes",
+    metadata={"model": _MODEL_ANALYSIS},
+    process_inputs=sanitize_inputs,
+)
 async def _detect_face_parts_bboxes(image_bytes: bytes, gemini_client) -> list[dict]:
     """눈(좌/우)·코·입 각각의 tight bbox를 float 퍼센트 좌표로 탐지한다.
 
@@ -506,9 +531,16 @@ def _create_contour_mask(
         dilation_size += 1
     mask_img = mask_img.filter(ImageFilter.MaxFilter(dilation_size))
 
-    # blur 하한: min_side < 30이면 2, 그 외 3 / 상한 5
+    # blur 하한: min_side < 30이면 2, 그 외 3
+    # 눈은 경계가 "떠 있는" 느낌을 줄이기 위해 blur 계수·상한을 더 크게 잡음 (Phase 30.2)
     blur_lower = 2 if min_side < 30 else 3
-    blur_r = min(5, max(blur_lower, int(min_side * 0.08)))
+    if part_name in ("left_eye", "right_eye"):
+        blur_coef = _EYE_MASK_BLUR_COEF
+        blur_upper = _EYE_MASK_BLUR_MAX
+    else:
+        blur_coef = _DEFAULT_MASK_BLUR_COEF
+        blur_upper = 5
+    blur_r = min(blur_upper, max(blur_lower, int(min_side * blur_coef)))
     mask_img = mask_img.filter(ImageFilter.GaussianBlur(radius=blur_r))
 
     logger.info(
@@ -614,6 +646,12 @@ def _compute_drift_ratio(
     return distance / orig_short
 
 
+@traceable(
+    run_type="tool",
+    name="composite_face_parts",
+    process_inputs=sanitize_inputs,
+    process_outputs=sanitize_bytes_output,
+)
 def _composite_face_parts(
     original_bytes: bytes,
     result_bytes: bytes,
@@ -663,8 +701,13 @@ def _composite_face_parts(
 
             fw = part["xmax"] - part["xmin"]
             fh = part["ymax"] - part["ymin"]
+            # 눈은 주변 털 포함을 최소화해 patch 경계 면적 축소 (Phase 30.2)
+            part_padding_ratio = (
+                _EYE_PADDING_RATIO if part["name"] in ("left_eye", "right_eye")
+                else padding_ratio
+            )
             # fw/fh가 0이면 pad도 0 → crop_w=0 방지: 최소 10px padding 보장
-            pad = max(10, int(max(fw, fh) * padding_ratio))
+            pad = max(10, int(max(fw, fh) * part_padding_ratio))
 
             ox1 = max(0, part["xmin"] - pad)
             oy1 = max(0, part["ymin"] - pad)
@@ -674,7 +717,7 @@ def _composite_face_parts(
             # 목적지 좌표: 결과 이미지에서 탐지한 파트 위치 우선, 없으면 비율 변환
             dst = dst_lookup.get(part["name"])
             if dst:
-                dst_pad = max(10, int(max(dst["xmax"] - dst["xmin"], dst["ymax"] - dst["ymin"]) * padding_ratio))
+                dst_pad = max(10, int(max(dst["xmax"] - dst["xmin"], dst["ymax"] - dst["ymin"]) * part_padding_ratio))
                 rx1 = max(0, dst["xmin"] - dst_pad)
                 ry1 = max(0, dst["ymin"] - dst_pad)
                 rx2 = min(res_w, dst["xmax"] + dst_pad)
@@ -698,7 +741,29 @@ def _composite_face_parts(
                 continue
 
             part_crop = original.crop((ox1, oy1, ox2, oy2))
-            part_crop_resized = part_crop.resize((crop_w, crop_h), Image.LANCZOS)
+
+            # 코: dst bbox에 맞춰 확대되지 않도록 이미지 스케일 비율로 리사이즈 후
+            #     dst 중심에 맞춰 붙임 (Phase 30.2). Gemini가 코를 크게 생성해도 원본 크기 유지.
+            if part["name"] == "nose":
+                scale_x = res_w / orig_w
+                scale_y = res_h / orig_h
+                scaled_w = max(1, int((ox2 - ox1) * scale_x))
+                scaled_h = max(1, int((oy2 - oy1) * scale_y))
+                part_crop_resized = part_crop.resize((scaled_w, scaled_h), Image.LANCZOS)
+                dst_cx = (rx1 + rx2) // 2
+                dst_cy = (ry1 + ry2) // 2
+                paste_x = max(0, min(res_w - scaled_w, dst_cx - scaled_w // 2))
+                paste_y = max(0, min(res_h - scaled_h, dst_cy - scaled_h // 2))
+                # 마스크 생성·drift 계산·seamless clone은 실제 paste 영역 기준으로 재정의
+                rx1, ry1 = paste_x, paste_y
+                rx2, ry2 = paste_x + scaled_w, paste_y + scaled_h
+                crop_w, crop_h = scaled_w, scaled_h
+                logger.info(
+                    "[gemini_pipeline] nose proportional resize: scale=(%.2f,%.2f) -> (%d,%d) at (%d,%d)",
+                    scale_x, scale_y, scaled_w, scaled_h, rx1, ry1,
+                )
+            else:
+                part_crop_resized = part_crop.resize((crop_w, crop_h), Image.LANCZOS)
 
             # 실제 윤곽 기반 마스크 + meta (gating 판정용)
             part_mask, mask_meta = _create_contour_mask(
@@ -804,6 +869,13 @@ def _is_color_acceptable(original_bytes: bytes, result_bytes: bytes) -> bool:
         return True
 
 
+@traceable(
+    run_type="llm",
+    name="gemini_generate_image",
+    metadata={"model": _MODEL_GEMINI},
+    process_inputs=sanitize_inputs,
+    process_outputs=sanitize_bytes_output,
+)
 async def _run_gemini(image_bytes: bytes, prompt: str, gemini_client) -> bytes:
     """Gemini로 이미지를 변환하고 결과 bytes를 반환한다.
 
@@ -860,6 +932,7 @@ async def _run_gemini(image_bytes: bytes, prompt: str, gemini_client) -> bytes:
     return result_bytes
 
 
+@traceable(run_type="chain", name="run_gemini_pipeline")
 async def run_gemini_pipeline(
     image_url: str,
     breed_id: str,
@@ -993,8 +1066,8 @@ async def run_gemini_pipeline(
             "Any color word in the grooming style description must be IGNORED for color. "
             "Apply the shape and cut only; the color above takes precedence.\n\n"
             "FEATURES TO PRESERVE EXACTLY:\n"
-            "- Eyes (shape, color, position): UNCHANGED\n"
-            "- Nose (shape, color, position): UNCHANGED\n"
+            "- Eyes (shape, color, size, position): UNCHANGED\n"
+            "- Nose (shape, color, size, position): EXACTLY the same scale as the original — do NOT enlarge, shrink, or redraw the nose larger/smaller than it appears in the input photo\n"
             "- Dog identity, face proportions, expression: UNCHANGED"
         )
 
@@ -1006,22 +1079,16 @@ async def run_gemini_pipeline(
         else:
             enhanced_prompt = gemini_prompt
 
-        # 6. Gemini API 호출 (색상 불량 + gating 합산 최대 2회 상한: retry_budget)
-        retry_budget = 2
+        # 6. Gemini API 호출 (Phase 30.2 — 단일 호출, 재호출 없음)
+        # 색상 불량 / gate-fail 모두 재호출 제거: 비용·지연 최소화, 결과는 그대로 진행.
         gemini_calls = 1
         result_bytes = await _run_gemini(image_bytes, enhanced_prompt, gemini_client)
-        if not _is_color_acceptable(image_bytes, result_bytes) and gemini_calls < retry_budget:
-            logger.warning("[gemini_pipeline] 색상 품질 불량 — 재시도 (1회)")
-            result_bytes = await _run_gemini(image_bytes, enhanced_prompt, gemini_client)
-            gemini_calls += 1
-            if _is_color_acceptable(image_bytes, result_bytes):
-                logger.warning("[gemini_pipeline] 재시도 성공 — 색상 OK")
-            else:
-                logger.warning("[gemini_pipeline] 재시도 후에도 색상 불량 — 그대로 진행")
+        if not _is_color_acceptable(image_bytes, result_bytes):
+            logger.warning("[gemini_pipeline] 색상 품질 불량 감지 — 재호출 없이 그대로 진행")
 
         # NOTE: _color_correct_result()는 비활성화 상태.
         # 히스토그램 LUT는 Gemini가 색을 크게 바꿀수록 역효과.
-        # 색상 보존은 프롬프트(ABSOLUTE COLOR RULE + RGB 실측값) + 재시도로 대응.
+        # 색상 보존은 프롬프트(ABSOLUTE COLOR RULE + RGB 실측값)에만 의존.
 
         # 6-2. 결과 이미지에서 face parts 탐지 → 얼굴 파트 합성 (gating 포함)
         meta_list: list[dict] = []
@@ -1035,25 +1102,6 @@ async def run_gemini_pipeline(
                 image_bytes, result_bytes, face_parts, dst_parts
             )
             logger.info("[gemini_pipeline] 얼굴 파트 합성 완료")
-
-            # Gate-fail 재호출: mandatory(eyes + nose) 중 _MIN_MANDATORY_PARTS_OK 이상 skip
-            mandatory = {"left_eye", "right_eye", "nose"}
-            skipped_mandatory = {
-                m["name"] for m in meta_list
-                if m.get("skip_reason") and m["name"] in mandatory
-            }
-            if len(skipped_mandatory) >= _MIN_MANDATORY_PARTS_OK and gemini_calls < retry_budget:
-                logger.warning(
-                    "[gemini_pipeline] gate retry 발동 — skipped=%s (mandatory %d개 이상)",
-                    skipped_mandatory, _MIN_MANDATORY_PARTS_OK,
-                )
-                result_bytes = await _run_gemini(image_bytes, enhanced_prompt, gemini_client)
-                gemini_calls += 1
-                dst_parts = await _detect_face_parts_bboxes(result_bytes, gemini_client)
-                result_bytes, meta_list = _composite_face_parts(
-                    image_bytes, result_bytes, face_parts, dst_parts
-                )
-                logger.info("[gemini_pipeline] gate retry 후 얼굴 파트 합성 재수행")
 
         # 7. Cloudinary 업로드
         logger.info("[gemini_pipeline] Cloudinary 업로드 시작")

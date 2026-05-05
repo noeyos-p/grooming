@@ -4,9 +4,11 @@ import time
 from fastapi import APIRouter, HTTPException
 
 from models.breed import GenerateRequest, GenerateResponse
+from services.anchor_inpaint_pipeline import run_anchor_inpaint_pipeline
+from services.evf_sam_geometry import QualityFailure
 from services.gemini_pipeline import run_gemini_pipeline
-from services.inpaint_pipeline import run_inpaint_pipeline
 from services.style_prompts import get_prompt
+from services.tracing import traceable
 from services.vertex_imagen_pipeline import run_vertex_imagen_pipeline
 from services.vertex_imagen_training import get_imagen_entry
 
@@ -16,6 +18,7 @@ router = APIRouter()
 
 
 @router.post("/api/generate", response_model=GenerateResponse)
+@traceable(run_type="chain", name="POST /api/generate")
 async def generate(request: GenerateRequest) -> GenerateResponse:
     """
     강아지 사진을 받아 지정된 견종+스타일로 AI 변환한 결과 URL을 반환한다.
@@ -59,13 +62,33 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
                 style_id=request.style_id,
             )
         else:
-            # Gemini 파이프라인 (features_bbox 합성 포함) — 구도 유지로 자연스러운 얼굴 보존
-            logger.info("[generate] Gemini 파이프라인 선택")
-            result_url = await run_gemini_pipeline(
-                image_url=request.image_url,
-                breed_id=request.breed_id,
-                style_id=request.style_id,
-            )
+            # Anchor-Inpaint v1.0 — EVF-SAM2 결정론적 앵커 + FLUX.1-fill
+            #   QualityFailure   → 422 (Gemini 폴백 금지 — ghost 경로 부활 방지)
+            #   RuntimeError     → Gemini 경로 폴백 (시스템/인프라 실패만 폴백)
+            logger.info("[generate] Anchor-inpaint 파이프라인 선택")
+            try:
+                result_url = await run_anchor_inpaint_pipeline(
+                    image_url=request.image_url,
+                    breed_id=request.breed_id,
+                    style_id=request.style_id,
+                )
+            except QualityFailure as qexc:
+                logger.warning("[generate] QualityFailure — 422 반환: %s", qexc)
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"얼굴 앵커 품질 기준 미달: {qexc}",
+                ) from qexc
+            except RuntimeError as rexc:
+                logger.warning(
+                    "[generate] anchor-inpaint 인프라 실패 — Gemini 폴백: %s", rexc
+                )
+                result_url = await run_gemini_pipeline(
+                    image_url=request.image_url,
+                    breed_id=request.breed_id,
+                    style_id=request.style_id,
+                )
+    except HTTPException:
+        raise
     except (ValueError, RuntimeError) as exc:
         # SDK 파라미터 오류 및 파이프라인 내부 오류 — 원시 오류를 클라이언트에 노출하지 않는다
         logger.error("[generate] 파이프라인 오류: %s", exc, exc_info=True)

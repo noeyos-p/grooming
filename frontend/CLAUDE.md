@@ -1,9 +1,11 @@
 # Frontend — 개발 환경 설정
 
 ## 기술 스택
-- Next.js 14+ (App Router)
+- Next.js 16+ (App Router)
 - TypeScript
 - Tailwind CSS + shadcn/ui
+
+> Next.js 16은 14/15와 API·규약이 다를 수 있음 — 신규 파일 작성 전 `node_modules/next/dist/docs/` 의 관련 가이드를 확인할 것 (`frontend/AGENTS.md` 참조)
 
 ## 설치 및 실행
 

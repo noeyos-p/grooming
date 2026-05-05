@@ -38,7 +38,7 @@
 
 | 영역 | 기술 |
 |------|------|
-| Frontend | Next.js 14+ (App Router) + TypeScript + Tailwind CSS + shadcn/ui |
+| Frontend | Next.js 16+ (App Router) + TypeScript + Tailwind CSS + shadcn/ui |
 | Mobile (추후) | React Native + Expo |
 | Backend | FastAPI (Python 3.11+) |
 | AI Pipeline | `backend/CLAUDE.md` 참조 |
@@ -55,9 +55,11 @@
 ```bash
 # Frontend
 cd frontend && npm install && npm run dev     # http://localhost:3000
+cd frontend && npm run lint
 
 # Backend
 cd backend && source venv/bin/activate && uvicorn main:app --reload  # http://localhost:8000
+cd backend && source venv/bin/activate && pytest
 ```
 
 **테스트 이미지:** 모든 테스트는 항상 `~/Downloads/IMG_7641.jpg` 를 사용할 것

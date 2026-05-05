@@ -23,6 +23,14 @@
 
 ---
 
+## CV 도구 — 사용 금지
+
+| 도구 | 금지 이유 |
+|------|-----------|
+| mediapipe / dlib (사람 얼굴 landmark) | 사람 얼굴 기반, 강아지 도메인 부적합 (구조적) |
+
+---
+
 ## 폐기된 인프라
 
 | 인프라 | 상태 | 비고 |
@@ -38,6 +46,18 @@
 |------|-----------|
 | ControlNet + SAM compositing 파이프라인 | 얼굴 보존 불가, 재창작 문제 |
 | `stability-ai/sdxl` 추론 경로 직접 사용 | inpainting 미지원 |
+
+---
+
+## CV Deterministic Geometry 후보 — 현재 채택 보류
+
+| 후보 | 상태 | 이유 | 재검토 조건 |
+|------|------|------|-----------|
+| DogFLW (martvelge/DogFLW) | 보류 | 데이터셋만 공개, pretrained weight 없음, CC-BY-NC 4.0으로 상업 사용 불가 | CC-BY-NC 4.0 해제 또는 상업 라이선스 협의 시 |
+| Ultralytics Dog-Pose + YOLOv8-pose fine-tune | 보류 | 데이터셋만 공개, pretrained는 human COCO로 학습됨, fine-tune 필수, AGPL-3.0 (상업 별도 라이선스) | AGPL 상업 라이선스 확보 또는 MIT 대안 모델 등장 시 |
+| SAM2 point prompts | 보류 | 현재 홀드. 2-stage crop Gemini 스파이크 결과 이후 재평가 | v1.1 Step 2 다중 이미지 재산정 결과 이후 |
+
+2-stage crop Gemini 스파이크는 2026-04-21 실측에서 불통 확정 (`max_std_ratio = 0.151`, baseline 대비 2.2× 악화, `run_2stage_crop_probe.py` · `TEST_RESULTS.md` 참조). Gemini VLM 내부 개선만으로 geometry 안정화는 불가능. 다음 트랙은 SAM2 point prompt 또는 YOLOv8 Dog-Pose fine-tune 중 별도 결정.
 
 ---
 

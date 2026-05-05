@@ -82,6 +82,34 @@ def _resize_mask_for_flux(mask_bytes: bytes, target_size: tuple[int, int]) -> by
     return buf.getvalue()
 
 
+def _parse_head_bbox_payload(data: dict, img_w: int, img_h: int) -> dict | None:
+    """Gemini 응답 payload를 픽셀 bbox로 변환한다.
+
+    두 스키마를 수용한다:
+      (1) 프롬프트 요청 스키마: {"xmin", "ymin", "xmax", "ymax"} — 0-100
+      (2) Gemini 2.5 native: {"box_2d": [ymin, xmin, ymax, xmax]} — 0-100 또는 0-1000
+          → max 값 > 100 이면 1000 스케일, 그 외는 100 스케일로 자동 판정
+    실패 시 None.
+    """
+    if {"xmin", "ymin", "xmax", "ymax"}.issubset(data.keys()):
+        xmin_p, ymin_p = float(data["xmin"]), float(data["ymin"])
+        xmax_p, ymax_p = float(data["xmax"]), float(data["ymax"])
+        scale = 100.0
+    elif isinstance(data.get("box_2d"), list) and len(data["box_2d"]) == 4:
+        ymin_p, xmin_p, ymax_p, xmax_p = (float(v) for v in data["box_2d"])
+        scale = 1000.0 if max(xmin_p, ymin_p, xmax_p, ymax_p) > 100 else 100.0
+    else:
+        return None
+    if xmax_p <= xmin_p or ymax_p <= ymin_p:
+        return None
+    return {
+        "xmin": int(xmin_p / scale * img_w),
+        "ymin": int(ymin_p / scale * img_h),
+        "xmax": int(xmax_p / scale * img_w),
+        "ymax": int(ymax_p / scale * img_h),
+    }
+
+
 async def _detect_full_head_bbox(image_bytes: bytes, gemini_client) -> dict | None:
     """강아지 머리 전체 bbox를 탐지한다.
 
@@ -116,20 +144,22 @@ async def _detect_full_head_bbox(image_bytes: bytes, gemini_client) -> dict | No
         raw = response.text or ""
         json_match = re.search(r"\{[\s\S]*?\}", raw)
         if not json_match:
-            logger.warning("[inpaint_pipeline] 머리 bbox 탐지: JSON 파싱 실패 — raw=%s", raw[:200])
+            logger.warning("[inpaint_pipeline] 머리 bbox 탐지: JSON 블록 없음 — raw=%s", raw[:200])
             return None
-        data = json.loads(json_match.group())
-        required = {"xmin", "ymin", "xmax", "ymax"}
-        if not required.issubset(data.keys()):
-            logger.warning("[inpaint_pipeline] 머리 bbox 탐지: 필수 키 누락 — keys=%s", list(data.keys()))
+        try:
+            data = json.loads(json_match.group())
+        except json.JSONDecodeError as exc:
+            logger.warning("[inpaint_pipeline] 머리 bbox 탐지: JSON 파싱 실패 — %s / raw=%s", exc, raw[:200])
             return None
-        bbox = {
-            "xmin": int(data["xmin"] / 100 * img_w),
-            "ymin": int(data["ymin"] / 100 * img_h),
-            "xmax": int(data["xmax"] / 100 * img_w),
-            "ymax": int(data["ymax"] / 100 * img_h),
-        }
-        logger.info("[inpaint_pipeline] 머리 bbox 탐지 성공: %s", bbox)
+        bbox = _parse_head_bbox_payload(data, img_w, img_h)
+        if bbox is None:
+            logger.warning(
+                "[inpaint_pipeline] 머리 bbox 탐지: 스키마 불일치 — keys=%s, raw=%s",
+                list(data.keys()), raw[:200],
+            )
+            return None
+        schema = "box_2d" if "box_2d" in data else "xyxy"
+        logger.info("[inpaint_pipeline] 머리 bbox 탐지 성공 (%s): %s", schema, bbox)
         return bbox
     except Exception as exc:
         logger.warning("[inpaint_pipeline] 머리 bbox 탐지 실패: %s", exc)

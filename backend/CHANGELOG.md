@@ -1,75 +1,19 @@
 # Backend Changelog
 
-<!--
+## 현재 상태 요약
 
-## 2026-04-20
+| 항목 | 내용 |
+|------|------|
+| 현재 파이프라인 | Phase 34.3 — anchor_inpaint (EVF-SAM2 + FLUX.1-fill, 전신 실루엣 기반 edit) |
+| 라우팅 | Imagen-first → anchor_inpaint → QualityFailure=422 / RuntimeError=Gemini 폴백 |
+| Face MAE 기준 | ≤ 25.0 (anchor 실측 mean=2.131) |
+| 구조 안정 기준 | silhouette_iou_whole ≥ 0.70 (Phase 34.2 확정) |
+| Edit-zone 기준 | baseline_p25 = 20.155 (Phase 34.2 Step 2, N=15) — Phase 34.3 변경으로 재산정 대기 중 |
+| 최신 Phase | 34.3 (2026-05-05) |
 
-**[face-preservation] 2026-04-20 13:44** — `IMG_7641.jpg` / `maltese/teddy_cut`
-- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660185/grooming-style/uploads/k8a84nkds9jqafm6koam.jpg
-- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660263/grooming-results/ittaiq8ekpyjxvvbieng.jpg
-- MAE: 26.5 / 기준 25.0 [FAIL]
+_이 요약은 최신 Phase 완료 후 갱신한다. 상세 규칙은 `backend/CLAUDE.md` 참조._
 
-## 작성 가이드
-
-**정렬**: 최신 날짜가 맨 위 · 같은 날짜 안에서도 최신 Phase가 위 (번호 높을수록 위)
-
-**Phase 템플릿**
-
-**[face-preservation] 2026-04-20 13:48** — `IMG_7641.jpg` / `maltese/teddy_cut`
-- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660433/grooming-style/uploads/iej1zyd0r3o3qwtk2yi9.jpg
-- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776660526/grooming-results/qohwixarzm6mhxzb0fvs.jpg
-- MAE: 73.9 / 기준 25.0 [FAIL]
-
-**[face-preservation] 2026-04-20 14:00** — `IMG_7641.jpg` / `maltese/teddy_cut`
-- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776661150/grooming-style/uploads/ursgozk2pdohr0zepv6s.jpg
-- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776661229/grooming-results/fjt6s5lhrb8qjhdninvf.jpg
-- MAE: 14.8 / 기준 25.0 [PASS]
-
-**[face-preservation] 2026-04-20 14:27** — `IMG_7641.jpg` / `maltese/teddy_cut`
-- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776662763/grooming-style/uploads/ixglbspcr7llyrkszktj.jpg
-- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776662862/grooming-results/anq8lv6koseau5xxhtie.jpg
-- MAE: 14.0 / 기준 25.0 [PASS]
-
-**[face-preservation] 2026-04-20 14:43** — `IMG_7641.jpg` / `maltese/teddy_cut`
-- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776663712/grooming-style/uploads/sieru25gwbdwu693x6jd.jpg
-- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776663805/grooming-results/ukxxriwrmlfjgzhjlkzn.jpg
-- MAE: 88.5 / 기준 25.0 [FAIL]
-
-**[face-preservation] 2026-04-20 14:45** — `IMG_7641.jpg` / `maltese/teddy_cut`
-- 업로드: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776663881/grooming-style/uploads/xayu3k76xj0cb4xhnzfr.jpg
-- 결과: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776663954/grooming-results/sps7jennvi1j2r1qrbta.jpg
-- MAE: 53.1 / 기준 25.0 [FAIL]
-
-### N. 제목 — 한 줄로 무슨 작업인지 명시
-
-배경이나 동기가 있으면 제목 바로 아래 한두 문장으로. (선택)
-
-**추가**
-- `경로/파일명` — 한 줄 설명
-
-**수정**
-- `경로/파일명` — 변경 내용 한 줄 요약
-
-**삭제**
-- `경로/파일명` — 삭제 이유
-
-**트러블슈팅**
-> **문제 제목**
-> - 증상:
-> - 원인:
-> - 해결:
-
-**시도한 접근**
-> **시도 제목 — 실패/보류**
-> - 방법:
-> - 결과:
-> - 대안:
-
-**평가** _(테스트 조건 명시)_ (선택)
-- 항목별 결과 및 향후 과제
-
-**규칙**: 같은 작업 흐름은 같은 Phase에 묶을 것 · 트러블슈팅/시도는 반드시 blockquote 형식
--->
+---
 
 ## AI 파이프라인 변화 흐름
 
@@ -114,7 +58,358 @@ flowchart TD
 
 ---
 
+## 2026-05-05
+
+### 34.3 Edit 마스크: head_bbox 한정 폐기, 전신 실루엣 기반으로 전환
+
+**배경**
+Phase 34.2까지 anchor-inpaint 파이프라인의 edit 마스크가 `_detect_full_head_bbox()` 결과로만 한정되어, 미용 스타일이 머리 위쪽·눈 윗부분에만 적용되고 몸통·다리 털이 변환되지 않는 구조적 문제 발생.
+
+**원인**
+`anchor_inpaint_pipeline.py:_build_two_layer_mask()`가 edit 마스크를 Gemini head_bbox 내부로만 제약했기 때문. head_bbox 자체가 얼굴 중심 사각형이므로 전신 편집이 원천 차단됨.
+
+**조치**
+- edit 마스크 출처 교체: `head_bbox` (한정) → 전신 실루엣 (`silhouette_iou.extract_foreground_mask`, rembg/u2net)
+- `_build_two_layer_mask()` 시그니처 변경: `(parts, head_bbox, img_size, part_r2)` → `(parts, body_silhouette: np.ndarray, img_size, part_r2)`
+- 마스크 합성 수식: `flux_edit = body_silhouette ∩ ¬dilate(anchor_bbox, r2)` (앵커 dilate 보호 로직 유지)
+- `anchor_inpaint_pipeline.py`에서 `_detect_full_head_bbox()` 호출 제거 → Gemini API 호출 1회 절감
+- 미사용 import 제거: `genai`, `os` 및 `GOOGLE_API_KEY` 상수
+- `_hard_restore_anchors()`, `_build_bbox_anchor_mask()` 변경 없음 → face MAE 보존 메커니즘 그대로 유지
+
+**검증**
+- 단위 테스트: `tests/test_anchor_inpaint_pipeline.py` 31/31 통과, `tests/test_silhouette_iou.py` 전 케이스 패스
+- 단건 실행: maltese/teddy_cut 표준 이미지(IMG_7641.jpg) — 머리·몸통·앞발·다리 미용 스타일 시각 확인. result_url: https://res.cloudinary.com/dubnzx8ew/image/upload/v1777958601/grooming-results/we0k7c5nrpeylsbjk3a0.jpg
+
+**변경 파일**
+- `services/anchor_inpaint_pipeline.py` — `_build_two_layer_mask` 호출부 + 파라미터 변경, `_detect_full_head_bbox()` 호출 제거
+- `tests/test_anchor_inpaint_pipeline.py` — 시그니처 변경에 따른 호출부 갱신, body_silhouette 테스트 케이스 추가
+- `tests/run_anchor_inpaint.py` — `_measure()` 내 호출부 갱신
+- 신규: `tests/run_body_silhouette_probe.py` (body_silhouette 검증용)
+
+**알려진 후속 이슈**
+FLUX가 마스크가 확대된 가슴/배 영역에 의류 패턴(검정 셔츠·꽃·하트·눈 모티브 등) 환각을 그려넣는 케이스 발견. negative_prompt 강화 또는 마스크 미세 조정으로 후속 대응 필요. 기존 알려진 이슈(털 색상 변경)와는 별개.
+
+**Baseline 재산정 상태**
+N=16 배치 게이트 재산정(`edit_zone_change baseline_p25`)은 별도 트리거 대기 중. Phase 34.3 변경으로 edit 영역이 head_bbox(한정) → 전신(확대)으로 바뀌었으므로 baseline 재산정 필수. 재산정 완료 전까지는 단건 단위로만 검증 가능.
+
+---
+
+## 2026-04-22
+
+### 34. Anchor-Inpaint v1.0 구현 — EVF-SAM2 결정론 앵커 + FLUX.1-fill
+
+**배경**
+Phase 32~33에서 Gemini VLM 기하의 regime-switching이 확정되어, 외부 결정론 CV 도입이 불가피해졌다. EVF-SAM2(text-grounded SAM2) 및 FLUX.1-fill 기반 anchor-inpaint v1.0 파이프라인을 구현하고 라우팅에 연결. 단일 샘플 smoke test에서 얼굴 보존과 편집 변화가 기존 Gemini baseline 대비 모두 개선.
+
+**신규 모듈**
+- `services/evf_sam_geometry.py` — EVF-SAM2 text-grounded 기하 탐지. nose cleanup: largest_cc → opening(5x5) → fill_holes → optional convex_hull. cx 기반 라벨 정렬(dog-perspective). position gate(좌표 범위 검사)로 오탐 필터링.
+- `services/anchor_inpaint_pipeline.py` — bbox 사각형 앵커 + 2-layer binary mask + FLUX.1-fill 호출 + boolean-index hard restore. mode 분류(full/degraded_single_eye), 파트별 r1/r2 동적 계산, hard preserve 영역 정확히 복원.
+
+**라우팅 변경**
+- `routers/generate.py` — `Imagen-first → anchor_inpaint → (QualityFailure=422, RuntimeError=Gemini 폴백)`
+  - QualityFailure (geometry 부재): 422 명시 실패, Gemini 폴백 금지 (ghost 경로 부활 방지)
+  - RuntimeError (FLUX/네트워크): Gemini 폴백만 허용 (시스템 오류)
+
+**테스트**
+- 단위 테스트: `tests/test_anchor_inpaint_pipeline.py` 18개 · `tests/test_generate_router.py` 7개 전부 통과
+- 수동 검증: `tests/run_anchor_inpaint.py` (pipeline=anchor|gemini 선택, 4지표 dump)
+
+**실측 수치 (2026-04-22, IMG_7641.jpg 고정, 확장 샘플 N=16)**
+
+**anchor-inpaint (N=11, 11개 견종 × 대표 스타일)**
+
+| 지표 | mean | median | p25 | p75 | min | max |
+|------|---:|---:|---:|---:|---:|---:|
+| face_mae | 2.131 | 2.131 | 2.131 | 2.131 | 2.130 | 2.132 |
+| edit_zone_change | 28.59 | 31.76 | 22.58 | 34.54 | 15.85 | 39.93 |
+| head_shape_iou | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| hard_preserve_area_ratio | 0.00957 | 0.00957 | 0.00957 | 0.00957 | 0.00957 | 0.00957 |
+
+- mode: full 11/11
+- position_gate_ok: true 11/11
+- label_swapped: true 11/11
+- head_iou_detect_fail: 11/11 (원본 head_bbox 탐지는 성공하지만 결과 head_bbox 탐지가 전부 실패 — 결과 이미지의 생성된 배경·포즈로 Gemini가 머리 탐지 실패)
+
+**gemini baseline (N=5, maltese/poodle/bichon/pomeranian/shih_tzu 각 1건)**
+
+| 지표 | mean | median | p25 | p75 | min | max |
+|------|---:|---:|---:|---:|---:|---:|
+| face_mae | 55.28 | 57.25 | 45.09 | 66.07 | 41.43 | 66.57 |
+| edit_zone_change | 29.31 | 31.33 | 29.94 | 31.48 | 17.87 | 35.93 |
+| head_shape_iou | 0.098 | 0.000 | 0.000 | 0.000 | 0.000 | 0.489 |
+| hard_preserve_area_ratio | 0.00957 | 0.00957 | 0.00957 | 0.00957 | 0.00957 | 0.00957 |
+
+- head_iou_detect_fail: 4/5 (shih_tzu/puppy_cut만 0.489로 성공)
+
+**v1.0 승인 판정 결론**
+
+- **Face MAE ≤ 25.0 기준** — anchor 11/11 통과, gemini 0/5 미달 (gemini는 기존 기준 완전 위반, anchor는 기준의 ~8% 수준)
+- **Edit-zone change baseline_p25 = 29.942** (Task #4 임계 산정 완료)
+  - anchor 샘플 중 edit_zone_change ≥ 29.942 기준 통과: 6/11
+  - 미달: 5/11 (maltese 17.86 · maltipoo 23.84 · shih_tzu 22.79 · papillon 22.36 · bedlington 15.85)
+  - 해석: p25 자체가 baseline 하위 25% 선이라 엄격하며, 같은 이미지×다른 스타일 분포로는 해석 한계 — v1.1에서 다양한 이미지로 재산정 필요
+- **Head shape IoU ≥ 0.85 — detect_fail 92% 로 지표 자체가 불안정, v1.0 판정에서 제외**
+  - plan의 "detect_fail 샘플은 판정에서 제외" 규칙 적용 → 유효 샘플 부족
+  - v1.1: silhouette mask IoU로 업그레이드 필수 (plan에 이미 명시)
+- **Hard preserve area ratio** — 단일 이미지 기준 전부 0.00957 (초기 가설값 0.08의 1/8)
+- **Degraded ratio** — 0% (normal)
+- **Mode/position_gate/label_swapped** — 전부 full/true/true (EVF-SAM2 viewer→dog 라벨 정렬 규칙이 안정적으로 동작)
+
+**다음 작업 TODO**
+- (a) edit_zone_change 임계 재산정 — 같은 이미지×다른 스타일이 아니라 다양한 이미지×동일 스타일로 수집 (v1.1 전제)
+- (b) head_bbox 재탐지 실패 구조적 원인 분석 — anchor 결과에서 100% 실패, gemini에서도 80% 실패. silhouette IoU로의 업그레이드 우선순위
+- (c) 견종별 hard_preserve_area_ratio 분포 수집 — 현재 단일 이미지 1값만 있음
+
+### 34.2.1 edit_zone_change baseline 다중 이미지 재산정 — Step 2
+
+**배경**: v1.0 baseline_p25 = 29.942는 IMG_7641.jpg 단일 이미지 × 5 gemini 샘플 기반. 2026-04-23 N=16 배치에서도 IMG_7641 × 5 gemini로 33.522. 이미지 분포 과적합 해소를 위해 다중 이미지 × 대표 스타일로 재산정.
+
+**구현**
+- `tests/run_edit_baseline_multi.py` 신규 — 5 이미지 × 3 스타일 gemini 배치. 이미지당 silhouette 마스크 1회 추출 재사용
+- 이미지: IMG_7641, IMG_2749, IMG_9712, IMG_9827, IMG_9999
+- 스타일: maltese/teddy_cut, bichon/round_cut, pomeranian/bear_cut (견종 중립 3개)
+
+**실측 (N=15, 2026-04-23, `/tmp/edit_baseline_multi.jsonl`)**
+
+| 지표 | 값 |
+|---|---:|
+| edit_zone_change mean / median | 41.358 / 28.001 |
+| edit_zone_change **p25** | **20.155** |
+| edit_zone_change p75 / min / max | 36.733 / 11.449 / 130.979 |
+| face_mae mean / median | 32.389 / 33.662 |
+| silhouette_iou_whole mean / median | 0.858 / 0.886 |
+
+**이미지별 p25 편차**
+- IMG_7641 18.951 / IMG_2749 14.683 / IMG_9712 23.157 / **IMG_9827 64.153** / IMG_9999 30.810
+
+**스타일별 p25**
+- maltese/teddy_cut 13.459 / bichon/round_cut 26.452 / pomeranian/bear_cut 28.001
+
+**IMG_9827 민감도 (참고값, 정식 기준 아님)**
+- IMG_9827 3샘플 중 2건이 edit>100 (bichon/round_cut 130.98, pomeranian/bear_cut 107.70) — gemini 전체재생성으로 튄 ghost 경로 특성 샘플
+- IMG_9827 제외 N=12 서브셋 p25 = **18.754** (제외 시 오히려 더 낮아져 anchor 기준이 관대해짐)
+- outlier가 baseline을 느슨하게 만드는 방향이므로 전체 N=15 값을 정식 기준으로 유지
+
+**규칙 변경 (확정)**
+- **edit_zone_change baseline_p25 = 20.155** 로 교체 (기존 29.942 폐기)
+- IMG_9827 제외 18.754는 **정식 기준이 아닌 민감도 참고값**
+
+**적용 — 2026-04-23 N=16 anchor 배치 평가**
+- 통과: 10/11 (90.9%)
+- 경계 실패: `bichon/round_cut` edit=19.46 (baseline 대비 -0.70)
+- 통과 샘플 edit 범위: 20.72 (poodle/teddy_cut) ~ 41.11 (bedlington/traditional_cut)
+
+**추가 관찰**
+- 2026-04-23 anchor 배치 edit p25(21.447)가 Step 2 baseline(20.155)과 거의 동일 — anchor 파이프라인이 gemini 다중 이미지 하한에 맞춰 편집 충분성을 유지함을 시사
+- bichon/round_cut은 견종 중립 스타일 중 edit 강도가 본래 작은 편 (Step 2 스타일별 p25 26.45) — 경계 실패는 구조적 요인일 가능성
+
+**경계 사례 분석 — `bichon/round_cut` edit=19.46 (IMG_7641)**
+
+지표 상세:
+- silhouette_iou_whole = 0.9213 (anchor N=11 중 2위, 구조 안정 상위)
+- face_mae = 2.131 (정상)
+- hard_preserve_area_ratio = 0.00957 (N=11 전원 동일 — mask 보수성 이슈 아님)
+
+교차검증 — 같은 `bichon/round_cut` gemini 5이미지 (Step 2, IMG_9827 outlier 제외):
+- edit 분포 15.91 / 26.45 / 26.61 / 33.60 (mean 25.64, min 15.91) — gemini도 해당 스타일에서 편집 강도 하위권
+
+같은 `round_cut` 다른 견종 비교:
+- `mini_bichon/round_cut` anchor edit = 30.86 (bichon 대비 +11.4) — 같은 스타일이라도 견종 프롬프트에 따라 편차 큼
+
+**판정**: 스타일 특성상 low-change 케이스. `bichon/round_cut` 프롬프트는 원본 말티즈 털과 목표(둥근 털)가 가까워 변환 압력이 본래 낮음. silhouette 상위권 + face 정상 + hard_preserve 비율 동일 → 구조 안정 과잉 달성이지 파이프라인 회귀 아님.
+
+**조치**: baseline_p25 = 20.155 유지, 본 건은 경계 사례 1건으로 기록. 스타일별 p25(bichon/round_cut 26.45) 분포를 감안하면 v1.1에서 견종/스타일별 가중 baseline을 재검토할 수도 있으나, v1.0 검증 범위 밖.
+
+result_url: https://res.cloudinary.com/dubnzx8ew/image/upload/v1776918192/grooming-results/eswxkxzew7gcdknrf8kc.jpg
+
+### 34.2 Silhouette IoU (whole) 채택 + N=16 배치 확정 — bbox IoU deprecate
+
+**배경**: Phase 34.1에서 파서 수정으로 detect_fail은 해소됐지만 Gemini head_bbox가 loose(이미지 80~100% 커버)해서 구조 안정 지표로 부족. v1.1 Step 1은 "실루엣 지표가 bbox보다 더 의미 있는가"만 빠르게 검증 → 통과 확인 후 측정 경로 통합 및 N=16 재실행으로 최종 지표로 확정.
+
+**구현**
+- `services/silhouette_iou.py` 신규 — rembg(u2net) 기반 전경 마스크, NEAREST 리사이즈 정렬, bool IoU, bbox crop 헬퍼
+- `tests/test_silhouette_iou.py` 12 tests pass (IoU 수학, 정렬, crop 경계)
+- `tests/run_silhouette_probe.py` — probe용 독립 스크립트
+- `tests/run_anchor_inpaint.py` / `tests/run_anchor_inpaint_batch.py` — `_measure()` / `_measure_metrics()`에 `silhouette_iou_whole` 통합. 원본 실루엣 마스크는 프로세스당 1회만 추출해 샘플 간 재사용
+- `tests/run_anchor_batch_smoke.py` 신규 — 1 anchor + 1 gemini 최소 샘플로 측정 경로 스모크
+- `requirements.txt` — `rembg[cpu]>=2.0.50` 추가 (Pillow 10.4.0 → 12.2.0 동반 업그레이드, 기존 53 tests 전수 통과 확인)
+
+**Probe 실측 (N=16, 2026-04-22, 측정 경로 통합 전)**
+
+| 지표 | anchor (N=11) | gemini (N=5) |
+|---|---:|---:|
+| silhouette_iou_whole mean / median | 0.789 / 0.806 | 0.904 / 0.907 |
+| silhouette_iou_whole min / max | 0.418 / 0.931 | 0.867 / 0.943 |
+| silhouette_iou_head_crop median | 0.699 | 0.694 |
+| bbox_iou_v1 valid samples | 0/11 | 1/5 |
+
+- silhouette whole 측정 성공률 16/16 vs bbox 1/16 (6.25%) — **bbox IoU는 구조 안정 지표로 사실상 측정 불가**
+- 실패 샘플 1건 (`anchor/papillon/natural_cut`, silh=0.418) → `/tmp/silhouette_fail/` 에 마스크 PNG 저장
+
+**확정 배치 (N=16, 2026-04-23, `/tmp/anchor_inpaint_batch.jsonl`, 측정 경로 통합 후)**
+
+| 지표 | anchor (N=11) | gemini (N=5) |
+|---|---:|---:|
+| silhouette_iou_whole mean / median | **0.832** / 0.806 | 0.865 / 0.872 |
+| silhouette_iou_whole min / max | 0.776 / 0.958 | 0.782 / 0.924 |
+| silhouette_iou_whole p25 / p75 | 0.793 / 0.847 | 0.855 / 0.890 |
+| silhouette_lt_0p70_count | **0/11** | 0/5 |
+| face_mae mean | 2.131 | 57.181 |
+| edit_zone_change p25 / median | 21.447 / 25.784 | 33.522 / 35.421 |
+| head_shape_iou (deprecated) detect_fail | 4/11 | 1/5 |
+
+- Probe 대비 anchor silhouette mean 0.789 → 0.832 개선 (probe는 기존 생성물 재측정, 이번 배치는 새로 생성). 최저값도 0.418 → 0.776으로 상승 — papillon 실패 샘플은 재생성 후 임계 통과
+- anchor 11/11 전원 `silhouette_iou_whole ≥ 0.70` 통과. gemini 5/5도 통과하지만 gemini는 Face MAE 기준 위반이어서 라우팅에서 배제
+
+**규칙 변경 (확정)**
+- **Head shape IoU (bbox 기반) → deprecate**. 구조 안정 승인 지표는 **silhouette_iou_whole** 로 교체
+- **silhouette_iou_whole ≥ 0.70** 을 v1.1 Step 1 정식 승인선으로 **확정** (N=16 전원 통과, 임시 꼬리표 제거)
+- head_crop IoU는 Gemini head_bbox loose 영향으로 참고치로만 유지
+
+**다음 (Step 2)**: edit_zone_change baseline은 단일 이미지 기반(gemini p25=33.522)이라 과적합. IMG_7641 포함 5장(IMG_7641 + IMG_2749 + IMG_9712 + IMG_9827 + IMG_9999) × 대표 스타일로 다중 이미지 재산정 예정
+
+### 34.1 head_bbox 파서 box_2d 스키마 수용 — Head IoU detect_fail 92% 원인 해결
+
+- 원인: Gemini 2.5 Flash가 `_detect_full_head_bbox()` 프롬프트 스키마를 무시하고 native `{"box_2d": [ymin, xmin, ymax, xmax]}` 포맷을 반환. 스케일도 0-100/0-1000 혼재. 진단 재호출(`tests/run_head_bbox_diagnosis.py`) 4/4 box_2d 확인, 배치 당시 1/16 "성공"은 우연
+- 수정: `services/inpaint_pipeline.py` — `_parse_head_bbox_payload()` 신규. xyxy 우선, box_2d는 max>100 이면 1000 스케일 자동 판정. 역전 bbox 거부
+- 검증: `tests/test_head_bbox_parser.py` 11 tests pass. 진단 재실행 legacy 0/4 → production 4/4 파싱 성공
+- 한계: Gemini bbox 자체가 loose(이미지 80~100% 커버)하여 Head IoU는 parser 수정만으로 v1.0 간이 지표 한계는 그대로. silhouette mask IoU 업그레이드(v1.1)는 별도 필요
+
+---
+
+## 2026-04-21
+
+### 33. 2-stage crop Gemini 스파이크 결과 — 불통, 외부 결정론 CV 필요 확정
+
+**스크립트**: `backend/tests/run_2stage_crop_probe.py` (신규)
+
+**절차**
+- `_detect_full_head_bbox()` 1회 → head_bbox 고정
+- padding_ratio=0.10으로 crop → PNG bytes
+- 같은 crop bytes로 `_detect_face_parts_bboxes()` N=5회 호출
+- crop 좌표를 원본 픽셀로 역변환, 원본 short_side로 정규화하여 baseline과 같은 축에서 비교
+
+**실측 (2026-04-21, `~/Downloads/IMG_7641.jpg`)**
+- head_bbox: (60, 120, 2963, 2782) — 원본(3024×4032)의 약 80% 면적
+- padded crop: (0, 0, 3024, 3072) — 원본의 약 98%. 실질 crop 효과 없음
+- 결과:
+  - `max_std_ratio = 0.151` (basis: `nose.cy`)
+  - `left_eye.cy_std_ratio = 0.131`, `right_eye.cy_std_ratio = 0.130`
+  - verdict = `unstable`
+- Baseline(단일 호출 N=5) 대비 약 2.2배 악화
+
+**원인 분석**
+- regime-switching은 "공간 localization" 문제가 아니라 **의미 수준 오류**
+- raw JSON 샘플: call 1,3,4,5는 `left_eye xmin ≈ 55–58%`로 정상 위치
+- **call 2 단독으로 `left_eye xmin=31, ymin=14`** (이마/귀 영역을 눈으로 오인). mouth도 동일하게 점프
+- Median/mean 집계로 outlier를 지우는 접근은 Phase 32에서 실패 — 이번 결과가 그 실패 원인 재확인
+
+**결론**
+- Gemini VLM만으로는 anchor 소스로 쓸 수 없음 — 외부 결정론 CV 모델 도입 불가피
+- 다음 트랙(YOLOv8 Dog-Pose fine-tune / SAM2 point prompt / 아키텍처 자체 재검토)은 별도 논의 후 결정
+- anchor_inpaint v1.0 본체 구현 착수 보류 상태 유지
+
+**금지 규칙 추가**: Gemini VLM 반복 호출 median으로 geometry 안정화를 시도하지 말 것 (Phase 32 + 33 확인됨)
+
+---
+
+### 32. Anchor-Inpainting v1.0 선행 조사 — 3단계 Probe 및 CV 결정론화 후보 평가
+
+**배경**
+- anchor_inpaint v1.0 설계 전 Gemini 기하 안정성 검증 및 외부 CV 모델 선택지 평가 필요. 3단계 스파이크 수행.
+
+**Step 0 — Soft mask probe (`backend/tests/run_soft_mask_probe.py`)**
+- FLUX.1-fill이 grayscale 중간값을 gradient 유도 신호로 사용하는지 검증
+- 결과: 불통 — Boundary gradient magnitude B/A=2.64 (기준≤0.7), seam score B/A=1.34 (기준≤0.8)
+- 결론: FLUX.1-fill은 soft band 미지원. anchor_inpaint v1.0 마스크는 **2-layer binary 고정**, soft band 설계는 v1.1로 이연
+
+**Step 1 — Geometry variance (`backend/tests/run_geometry_variance.py`)**
+- 동일 이미지(`~/Downloads/IMG_7641.jpg`) 5회 호출, `_detect_face_parts_bboxes()` 좌표 편차 측정
+- 최악값: `nose.cy_std_ratio=0.068` (임계 BORDERLINE_THRESHOLD=0.025의 약 2.7배)
+- Verdict: **unstable**. Gemini VLM 단일 호출은 v1.0 앵커 소스 부적합
+
+**Step 1.5 — Geometry median probe (`backend/tests/run_geometry_median_probe.py`)**
+- N=3/N=5 median 집계 각 3회씩 반복 (총 Gemini 호출 24회)
+- N=3: `nose` 기준 `max_std_ratio=0.0372`, verdict=unstable
+- N=5: `right_eye` 기준 `max_std_ratio=0.0367`, verdict=unstable
+- 핵심: N≥5가 나아지지 않음 → regime-switching 오차(한 호출에서 다른 파트로 점프). median 집계로는 해결 불가
+- 권고: `escalate_to_cv_deterministic`
+
+**Step 2 — CV 결정론화 후보 평가 (2026-04-21)**
+- DogFLW: 데이터셋만 공개, pretrained weight 없음, CC-BY-NC 4.0 (비상업 전용) — 상업 경로 차단
+- Ultralytics Dog-Pose + YOLOv8-pose fine-tune: 데이터셋 공개, pretrained는 human COCO 기반, fine-tune 필수, AGPL-3.0 (상용 별도 라이선스)
+- mediapipe/dlib: 도메인 부적합 (사람 얼굴 기반)
+- SAM2 point prompts: 보류
+
+**결론 및 다음 단계**
+- anchor_inpaint v1.0 본체 구현 착수 **보류**
+- 2-stage crop Gemini 재호출 스파이크 선행: `_detect_full_head_bbox()`로 head crop만 Gemini 재투입, face parts 분산 감소 측정. 외부 모델 없이 1~2시간 내 판정 가능. 통과 시 외부 CV 도입 회피, 실패 시 YOLOv8 fine-tune 트랙 착수
+
+---
+
 ## 2026-04-20
+
+### 31. LangSmith 트레이싱 도입 — 파이프라인 전체 흐름 가시화
+
+**배경**
+- Gemini 파이프라인은 `_analyze_dog_features`, `_detect_face_parts_bboxes` (src/dst 각각), `_run_gemini`, `_composite_face_parts` 등 여러 단계가 순차·병렬로 얽혀 있어 문제 구간을 로그만으로 추적하기 어렵다.
+- 사용자 요청: "현재 코드에 LangSmith 추가 — 전부 어떻게 흘러가는지 보이도록".
+
+**변경**
+- `requirements.txt` — `langsmith>=0.1.0` 추가.
+- `services/tracing.py` (신규) — `langsmith.traceable` pass-through 래퍼 + bytes/client 인자 sanitizer. 패키지 미설치 또는 `LANGCHAIN_TRACING_V2` 미설정 시 완전 no-op.
+- `services/gemini_pipeline.py` — 주요 함수 6개에 `@traceable` 부착:
+  - `run_gemini_pipeline` (chain), `_analyze_dog_features` (llm), `_detect_face_parts_bboxes` (llm), `_run_gemini` (llm), `_extract_dominant_fur_colors` (tool), `_composite_face_parts` (tool)
+  - `gemini_client` 인자와 원본 `image_bytes`는 sanitizer가 걸러냄 — LangSmith payload에 raw 이미지 전송 방지.
+- `routers/generate.py` — `POST /api/generate` 핸들러에 `@traceable(run_type="chain")` 부착하여 최상위 span 생성.
+
+**환경변수 (backend/.env)**
+```
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=<LangSmith API 키>
+LANGCHAIN_PROJECT=grooming-style
+```
+
+**충돌 없음**
+- hot path 동작 변경 없음. 환경변수가 없으면 데코레이터는 원 함수를 그대로 호출한다.
+
+---
+
+### 30.2 — 눈·코 합성 미세화 + 재호출 로직 전면 제거
+
+**배경**
+- Phase 30.1 적용 후 눈·코 합성이 성공했으나 두 가지 시각 문제 남음:
+  - 눈: 원본 눈 크롭 paste 시 크롭 주변 원본 털이 Gemini 스타일 털 위에 "떠 있는" 느낌
+  - 코: 원본 코 크롭을 dst bbox 크기로 강제 리사이즈 → Gemini가 코를 크게 생성하면 같이 확대됨
+- 사용자 피드백: "합성 복사본이 눈 위에 떠 있는 느낌", "코가 너무 크게 paste됨"
+- 추가 요청: "Gemini를 두 번 호출하면 안 될 것 같다" — 재호출 로직 전면 제거 (비용/지연 최소화)
+  - 이유: 두번 요청하면 원본에서 너무 멀어짐. 따라서 제미나이는 한번만 호출해야함.
+
+**변경**
+- `services/gemini_pipeline.py` 상단 상수 추가:
+  - `_EYE_PADDING_RATIO = 0.03` (기본 0.06의 절반) — 눈 크롭 주변 털 면적 최소화
+  - `_DEFAULT_PADDING_RATIO = 0.06` — 코/입용 기본 padding
+  - `_EYE_MASK_BLUR_COEF = 0.15` (기본 0.08) — 눈 마스크 feathering 강화
+  - `_DEFAULT_MASK_BLUR_COEF = 0.08` — 기본 blur 계수
+  - `_EYE_MASK_BLUR_MAX = 8` (기본 5) — 눈 마스크 blur 상한
+- `_create_contour_mask()`: 눈이면 blur 계수 0.15 / 상한 8 적용 (기본 0.08 / 상한 5) — 경계 feathering 강화
+- `_composite_face_parts()`:
+  - 눈 padding 0.06 → 0.03 (`_EYE_PADDING_RATIO`) — 크롭 주변 털 면적 축소
+  - 코는 이미지 스케일 비율(`res_w/orig_w`, `res_h/orig_h`)로 proportional resize 후 dst 중심에 center-paste — Gemini가 코를 크게 생성해도 원본 크기 유지
+- `run_gemini_pipeline()` 프롬프트 FEATURES TO PRESERVE EXACTLY 섹션:
+  - `Eyes (shape, color, position)` → `Eyes (shape, color, size, position)` (size 추가)
+  - `Nose (shape, color, position): UNCHANGED` → `Nose (shape, color, size, position): EXACTLY the same scale as the original — do NOT enlarge, shrink, or redraw the nose larger/smaller than it appears in the input photo`
+- `run_gemini_pipeline()` 재호출 로직 제거:
+  - 색상 불량 재호출 블록 삭제 (경고 로그만 유지)
+  - gate-fail 재호출 블록 삭제 (mandatory 2개 이상 skip 판정 로직 삭제)
+  - `retry_budget` 변수, `_MIN_MANDATORY_PARTS_OK` 상수 제거
+  - Gemini API 호출은 항상 1회만 수행
+
+**폐기/충돌 없음**
+- Phase 30 gating 규칙 유지 (4조건 gating: active_pixels_low / ellipse_fallback / mask_area_too_large / drift_too_large)
+- Phase 30.1 drift 임계값(0.6) 유지
+
+---
 
 ### 30.1 — drift 임계값 완화 (0.25 → 0.6)
 
@@ -1128,3 +1423,41 @@ SAM compositing을 Gemini에 붙였을 때 ghost 현상이 발견되어 제거�
 - `services/segmentation.py` — Grounded SAM 배경 분리
 - `services/style_prompts.py` — 11개 견종 × 3개 스타일 프롬프트 정의
 - `models/breed.py` — Pydantic 모델 (BreedInfo, GenerateRequest 등)
+
+---
+
+## 작성 가이드
+
+**정렬**: 최신 날짜가 맨 위 · 같은 날짜 안에서도 최신 Phase가 위 (번호 높을수록 위)
+
+**Phase 템플릿**
+
+### N. 제목 — 한 줄로 무슨 작업인지 명시
+
+배경이나 동기가 있으면 제목 바로 아래 한두 문장으로. (선택)
+
+**추가**
+- `경로/파일명` — 한 줄 설명
+
+**수정**
+- `경로/파일명` — 변경 내용 한 줄 요약
+
+**삭제**
+- `경로/파일명` — 삭제 이유
+
+**트러블슈팅**
+> **문제 제목**
+> - 증상:
+> - 원인:
+> - 해결:
+
+**시도한 접근**
+> **시도 제목 — 실패/보류**
+> - 방법:
+> - 결과:
+> - 대안:
+
+**평가** _(테스트 조건 명시)_ (선택)
+- 항목별 결과 및 향후 과제
+
+**규칙**: 같은 작업 흐름은 같은 Phase에 묶을 것 · 트러블슈팅/시도는 반드시 blockquote 형식

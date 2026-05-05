@@ -36,6 +36,7 @@ backend/**/*.pyc
 backend/**/*.pyo
 backend/.pytest_cache/
 backend/scripts/results.json
+backend/tests/_out/
 
 # ===== Claude agent memory (local only) =====
 .claude/
